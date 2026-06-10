@@ -841,10 +841,12 @@ export async function runServerBetaGenerationWorker(): Promise<void> {
   });
   console.log(JSON.stringify({ status: 'worker-running', runtime: SERVER_BETA_RUNTIME, pid: process.pid }));
 
+  const keepAlive = createServerBetaGenerationWorkerKeepAlive();
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
+    clearInterval(keepAlive);
     try {
       await service.stop();
     } finally {
@@ -857,6 +859,13 @@ export async function runServerBetaGenerationWorker(): Promise<void> {
   // Block forever — Workers run in background via BullMQ. Without this the
   // process would exit and BullMQ jobs would never be consumed.
   await new Promise<void>(() => {});
+}
+
+export function createServerBetaGenerationWorkerKeepAlive(): NodeJS.Timeout {
+  // Bun does not keep the process alive for a pending Promise alone. Keep one
+  // referenced timer in the worker-only CLI so BullMQ workers can consume jobs
+  // until SIGTERM/SIGINT runs the shutdown path.
+  return setInterval(() => {}, 60_000);
 }
 
 function getServerBetaPort(): number {
