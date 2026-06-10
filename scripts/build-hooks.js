@@ -649,8 +649,11 @@ async function buildHooks() {
     if (!mcpSearchCommand.includes('.codex/plugins/cache/claude-mem-local/claude-mem')) {
       throw new Error('plugin/.mcp.json mcp-search launcher must include Codex cache fallback for hosts that do not inject PLUGIN_ROOT');
     }
+    if (!mcpSearchCommand.includes('plugins/cache/ormequ/claude-mem')) {
+      throw new Error('plugin/.mcp.json mcp-search launcher must include fork Claude cache fallback for hosts that do not inject PLUGIN_ROOT');
+    }
     if (!mcpSearchCommand.includes('plugins/cache/thedotmack/claude-mem')) {
-      throw new Error('plugin/.mcp.json mcp-search launcher must include Claude cache fallback for hosts that do not inject PLUGIN_ROOT');
+      throw new Error('plugin/.mcp.json mcp-search launcher must include upstream Claude cache fallback for hosts that do not inject PLUGIN_ROOT');
     }
     console.log('✓ All required distribution files present');
 

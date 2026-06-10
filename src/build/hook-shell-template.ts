@@ -18,7 +18,8 @@
  *   1. ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}   (host-injected env)
  *   2. (mcp only) $PWD/plugin, $PWD               (repo/dev checkout)
  *   3. cache directories (newest first via `ls -dt`)
- *   4. $_C/plugins/marketplaces/thedotmack/plugin (marketplace install)
+ *   4. $_C/plugins/marketplaces/ormequ/plugin (fork marketplace install)
+ *   5. $_C/plugins/marketplaces/thedotmack/plugin (upstream marketplace fallback)
  */
 
 export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'mcp';
@@ -119,10 +120,15 @@ function candidateBlock(options: ShellTemplateOptions): string {
   }
 
   const extraCacheRoots = isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : [];
-  const allGlobs = [...extraCacheRoots, '$_C/plugins/cache/thedotmack/claude-mem']
+  const allGlobs = [
+    ...extraCacheRoots,
+    '$_C/plugins/cache/ormequ/claude-mem',
+    '$_C/plugins/cache/thedotmack/claude-mem',
+  ]
     .map((root) => `"${root}"/[0-9]*/`)
     .join(' ');
   lines.push(`ls -dt ${allGlobs} 2>/dev/null;`);
+  lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/ormequ/plugin";`);
   lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/thedotmack/plugin";`);
 
   // The MCP loop trims a trailing slash inline; the hook loop trims via _R="${_R%/}".
@@ -179,9 +185,13 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
   const cacheRoots = [
     ...(options.mcpExtraCacheRoots ?? []),
+    '$_C/plugins/cache/ormequ/claude-mem',
     '$_C/plugins/cache/thedotmack/claude-mem',
   ].map(shTokenToNode);
-  const marketplace = shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin');
+  const marketplaces = [
+    shTokenToNode('$_C/plugins/marketplaces/ormequ/plugin'),
+    shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin'),
+  ];
   const require = JSON.stringify(options.requireFile);
   const notFound = JSON.stringify(`${options.notFoundMessage}\n`);
 
@@ -189,7 +199,7 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
     'E',
     ...candidates,
     ...cacheRoots.map((root) => `...L(${root})`),
-    marketplace,
+    ...marketplaces,
   ].join(',');
 
   return (
