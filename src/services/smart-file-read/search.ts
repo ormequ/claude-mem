@@ -147,6 +147,7 @@ export async function searchCodebase(
   }
 
   const parsedFiles = parseFilesBatch(filesToParse, projectRoot);
+  const fileContentByPath = new Map(filesToParse.map((file) => [file.relativePath, file.content.toLowerCase()]));
 
   const foldedFiles: FoldedFile[] = [];
   const matchingSymbols: SymbolMatch[] = [];
@@ -156,7 +157,8 @@ export async function searchCodebase(
     totalSymbolsFound += countSymbols(parsed);
 
     const pathMatch = matchScore(relPath.toLowerCase(), queryParts);
-    let fileHasMatch = pathMatch > 0;
+    const contentMatch = fileContentByPath.get(relPath)?.includes(queryLower) ?? false;
+    let fileHasMatch = pathMatch > 0 || contentMatch;
     const fileSymbolMatches: SymbolMatch[] = [];
 
     const checkSymbols = (symbols: typeof parsed.symbols, parent?: string) => {
@@ -216,7 +218,9 @@ export async function searchCodebase(
 
   const trimmedSymbols = matchingSymbols.slice(0, maxResults);
   const relevantFiles = new Set(trimmedSymbols.map(s => s.filePath));
-  const trimmedFiles = foldedFiles.filter(f => relevantFiles.has(f.filePath)).slice(0, maxResults);
+  const trimmedFiles = foldedFiles
+    .filter(f => relevantFiles.size === 0 || relevantFiles.has(f.filePath) || matchingSymbols.length < maxResults)
+    .slice(0, maxResults);
 
   const tokenEstimate = trimmedFiles.reduce((sum, f) => sum + f.foldedTokenEstimate, 0);
 
@@ -271,22 +275,22 @@ export function formatSearchResults(result: SearchResult, query: string): string
   parts.push("");
 
   if (result.matchingSymbols.length === 0) {
-    parts.push("   No matching symbols found.");
-    return parts.join("\n");
-  }
-
-  parts.push("── Matching Symbols ──");
-  parts.push("");
-  for (const match of result.matchingSymbols) {
-    parts.push(`  ${match.kind} ${match.symbolName} (${match.filePath}:${match.lineStart + 1})`);
-    parts.push(`    ${match.signature}`);
-    if (match.jsdoc) {
-      const firstLine = match.jsdoc.split("\n").find(l => l.replace(/^[\s*/]+/, "").trim().length > 0);
-      if (firstLine) {
-        parts.push(`    💬 ${firstLine.replace(/^[\s*/]+/, "").trim()}`);
-      }
-    }
+    parts.push("   No matching symbols found; showing file-level folded matches.");
     parts.push("");
+  } else {
+    parts.push("── Matching Symbols ──");
+    parts.push("");
+    for (const match of result.matchingSymbols) {
+      parts.push(`  ${match.kind} ${match.symbolName} (${match.filePath}:${match.lineStart + 1})`);
+      parts.push(`    ${match.signature}`);
+      if (match.jsdoc) {
+        const firstLine = match.jsdoc.split("\n").find(l => l.replace(/^[\s*/]+/, "").trim().length > 0);
+        if (firstLine) {
+          parts.push(`    💬 ${firstLine.replace(/^[\s*/]+/, "").trim()}`);
+        }
+      }
+      parts.push("");
+    }
   }
 
   parts.push("── Folded File Views ──");

@@ -132,6 +132,7 @@ export interface ServerBetaAddObservationRequest {
   serverSessionId?: string | null;
   kind?: string;
   content: string;
+  narrative?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -292,6 +293,7 @@ export class ServerBetaClient {
       projectId: input.projectId,
       kind,
       type: kind,
+      content,
       narrative: content,
       ...(metadataTitle ? { title: metadataTitle } : {}),
       ...(input.serverSessionId !== undefined ? { serverSessionId: input.serverSessionId } : {}),

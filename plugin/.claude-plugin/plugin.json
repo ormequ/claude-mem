@@ -3,9 +3,9 @@
   "version": "13.5.5",
   "description": "Memory compression system for Claude Code - persist context across sessions",
   "author": {
-    "name": "Alex Newman"
+    "name": "Alex Newman; fork maintained by Ilya Belokobylskii"
   },
-  "repository": "https://github.com/thedotmack/claude-mem",
+  "repository": "https://github.com/ormequ/claude-mem",
   "license": "Apache-2.0",
   "keywords": [
     "claude",
@@ -20,5 +20,5 @@
     "typescript",
     "nodejs"
   ],
-  "homepage": "https://github.com/thedotmack/claude-mem#readme"
+  "homepage": "https://github.com/ormequ/claude-mem#readme"
 }

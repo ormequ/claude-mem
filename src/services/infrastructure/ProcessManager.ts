@@ -428,7 +428,7 @@ export function spawnDaemon(
   }
 
   if (process.platform === 'win32') {
-    const psScript = `Start-Process -FilePath '${runtimePath.replace(/'/g, "''")}' -ArgumentList @('${scriptPath.replace(/'/g, "''")}','--daemon') -WindowStyle Hidden`;
+    const psScript = `Start-Process -FilePath '${runtimePath.replace(/'/g, "''")}' -ArgumentList @('${scriptPath.replace(/'/g, "''")}') -WindowStyle Hidden`;
     const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
 
     try {
@@ -454,8 +454,8 @@ export function spawnDaemon(
 
   const execPath = useSetsid ? setsidPath : runtimePath;
   const args = useSetsid
-    ? [runtimePath, scriptPath, '--daemon']
-    : [scriptPath, '--daemon'];
+    ? [runtimePath, scriptPath]
+    : [scriptPath];
 
   const child = spawnHidden(execPath, args, {
     detached: true,
@@ -518,4 +518,3 @@ export function touchPidFile(): void {
 export function cleanStalePidFile(): ValidateWorkerPidStatus {
   return validateWorkerPidFile({ logAlive: false });
 }
-
