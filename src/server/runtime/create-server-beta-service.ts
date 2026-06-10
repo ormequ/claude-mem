@@ -249,8 +249,12 @@ function buildGenerationWorkerManager(
   });
 }
 
+export function resolveServerGenerationProviderName(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.CLAUDE_MEM_SERVER_PROVIDER ?? env.CLAUDE_MEM_PROVIDER ?? '').trim().toLowerCase();
+}
+
 function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null {
-  const provider = (process.env.CLAUDE_MEM_SERVER_PROVIDER ?? '').trim().toLowerCase();
+  const provider = resolveServerGenerationProviderName();
   if (!provider) return null;
   try {
     if (provider === 'claude' || provider === 'anthropic') {
