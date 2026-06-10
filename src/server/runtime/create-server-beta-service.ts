@@ -253,6 +253,25 @@ export function resolveServerGenerationProviderName(env: NodeJS.ProcessEnv = pro
   return (env.CLAUDE_MEM_SERVER_PROVIDER ?? env.CLAUDE_MEM_PROVIDER ?? '').trim().toLowerCase();
 }
 
+export function resolveServerGenerationModelName(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const explicit = env.CLAUDE_MEM_SERVER_MODEL?.trim();
+  if (explicit) return explicit;
+
+  if (provider === 'openrouter') {
+    return env.CLAUDE_MEM_OPENROUTER_MODEL?.trim() || env.OPENROUTER_MODEL?.trim() || undefined;
+  }
+  if (provider === 'gemini') {
+    return env.CLAUDE_MEM_GEMINI_MODEL?.trim() || undefined;
+  }
+  if (provider === 'claude' || provider === 'anthropic') {
+    return env.CLAUDE_MEM_MODEL?.trim() || undefined;
+  }
+  return undefined;
+}
+
 function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null {
   const provider = resolveServerGenerationProviderName();
   if (!provider) return null;
@@ -261,21 +280,24 @@ function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null
       const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '';
       if (!apiKey) return null;
       const opts: { apiKey: string; model?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
+      const model = resolveServerGenerationModelName(provider);
+      if (model) opts.model = model;
       return new ClaudeObservationProvider(opts);
     }
     if (provider === 'gemini') {
       const apiKey = process.env.GEMINI_API_KEY ?? process.env.CLAUDE_MEM_GEMINI_API_KEY ?? '';
       if (!apiKey) return null;
       const opts: { apiKey: string; model?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
+      const model = resolveServerGenerationModelName(provider);
+      if (model) opts.model = model;
       return new GeminiObservationProvider(opts);
     }
     if (provider === 'openrouter') {
       const apiKey = process.env.OPENROUTER_API_KEY ?? process.env.CLAUDE_MEM_OPENROUTER_API_KEY ?? '';
       if (!apiKey) return null;
       const opts: { apiKey: string; model?: string; baseUrl?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
+      const model = resolveServerGenerationModelName(provider);
+      if (model) opts.model = model;
       // #2382/#2590/#2622/#2393 — optional OpenAI-compatible base URL.
       const baseUrl = process.env.CLAUDE_MEM_OPENROUTER_BASE_URL ?? process.env.OPENROUTER_BASE_URL;
       if (baseUrl) opts.baseUrl = baseUrl;
