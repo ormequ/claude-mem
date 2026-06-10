@@ -210,15 +210,13 @@ describe('ServerBetaClient', () => {
     });
     expect(captured[0]?.url).toBe('http://localhost:9999/v1/memories');
     expect(captured[0]?.method).toBe('POST');
-    // Write-path contract (#2684): content maps onto narrative (the FTS-indexed
-    // / trigger-precondition column) and type defaults from kind, so the row is
-    // never empty. The old payload shipped a `content` field that no column
-    // accepted, producing a frozen/empty observation.
+    // Fork contract: send canonical `content` while keeping `narrative` as a
+    // legacy alias for server builds that still index that field.
     const body = captured[0]?.body as Record<string, unknown>;
     expect(body.narrative).toBe('hello');
     expect(body.kind).toBe('manual');
     expect(body.type).toBe('manual');
-    expect(body.content).toBeUndefined();
+    expect(body.content).toBe('hello');
     expect(result.memory.id).toBe('o1');
   });
 
@@ -254,6 +252,24 @@ describe('ServerBetaClient', () => {
     expect(result.observations).toHaveLength(2);
   });
 
+  it('recentContext sends POST /v1/context/recent and returns startup context string', async () => {
+    installFetch(async () => new Response(
+      JSON.stringify({
+        observations: [{ id: 'o1', projectId: 'p1', content: 'latest startup context' }],
+        context: '# [MKS] recent context\n\nlatest startup context',
+      }),
+      { status: 200 },
+    ));
+    const client = new ServerBetaClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
+    const result = await client.recentContext({ projectId: 'p1', projectName: 'MKS', limit: 50 });
+    expect(captured[0]?.url).toBe('http://localhost:9999/v1/context/recent');
+    expect((captured[0]?.body as Record<string, unknown>).projectId).toBe('p1');
+    expect((captured[0]?.body as Record<string, unknown>).projectName).toBe('MKS');
+    expect((captured[0]?.body as Record<string, unknown>).limit).toBe(50);
+    expect(result.context).toContain('latest startup context');
+  });
+
+
   it('getJobStatus sends GET /v1/jobs/:id', async () => {
     installFetch(async () => new Response(
       JSON.stringify({ generationJob: { id: 'j1', status: 'queued' } }),
@@ -279,12 +295,13 @@ describe('ServerBetaClient', () => {
 
   it('payload builders omit absent fields', () => {
     const client = new ServerBetaClient({ serverBaseUrl: 'http://x', apiKey: 'k' });
-    // content → narrative, type defaults from kind (default 'manual') so a
-    // minimal observation_add still persists a searchable row (#2684).
+    // Fork contract: `content` is canonical for server-beta validation, while
+    // `narrative` remains as a legacy alias.
     expect(client.buildAddObservationPayload({ projectId: 'p', content: 'c' })).toEqual({
       projectId: 'p',
       kind: 'manual',
       type: 'manual',
+      content: 'c',
       narrative: 'c',
     });
     expect(client.buildSearchPayload({ projectId: 'p', query: 'q' })).toEqual({

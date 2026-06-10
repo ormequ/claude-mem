@@ -206,6 +206,18 @@ describe('Phase 8 MCP-backing REST endpoints (/v1/memories, /v1/search, /v1/cont
     expect(result.context.split('\n\n').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('startup context path: POST /v1/context/recent returns newest Postgres observations', async () => {
+    const c = buildClient();
+    await c.addObservation({ projectId, content: 'old server-beta startup context from June 8', kind: 'manual' });
+    await c.addObservation({ projectId, content: 'new server-beta startup context from June 10', kind: 'manual' });
+
+    const result = await c.recentContext({ projectId, projectName: 'MKS', limit: 50 });
+    expect(result.context).toContain('# [MKS] recent context');
+    expect(result.context).toContain('new server-beta startup context from June 10');
+    expect(result.context).toContain('old server-beta startup context from June 8');
+    expect(result.observations).toHaveLength(2);
+  });
+
   it('observation_generation_status path: GET /v1/jobs/:id returns the same payload as REST', async () => {
     const c = buildClient();
     const recorded = await c.recordEvent({

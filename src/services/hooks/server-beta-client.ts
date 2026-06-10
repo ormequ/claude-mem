@@ -183,6 +183,24 @@ export interface ServerBetaContextObservationsResponse {
   context: string;
 }
 
+// Server-beta SessionStart context injection. Unlike `/v1/context`, this is a
+// recency pack rather than an FTS query, matching legacy `/api/context/inject`.
+export interface ServerBetaRecentContextRequest {
+  projectId: string;
+  projectName?: string;
+  limit?: number;
+}
+
+export interface ServerBetaRecentContextResponse {
+  observations: Array<{
+    id: string;
+    projectId: string;
+    content: string;
+    [key: string]: unknown;
+  }>;
+  context: string;
+}
+
 // Phase 8 — generation job status, scoped by api-key team/project.
 export interface ServerBetaJobStatusResponse {
   generationJob: {
@@ -263,6 +281,16 @@ export class ServerBetaClient {
     );
   }
 
+  async recentContext(
+    input: ServerBetaRecentContextRequest,
+  ): Promise<ServerBetaRecentContextResponse> {
+    return this.request<ServerBetaRecentContextResponse>(
+      'POST',
+      '/v1/context/recent',
+      this.buildRecentContextPayload(input),
+    );
+  }
+
   // Phase 8 — MCP `observation_generation_status`. Server returns the same
   // payload as `/v1/jobs/:id` so MCP clients and REST clients see identical
   // job status (including transport state).
@@ -307,6 +335,16 @@ export class ServerBetaClient {
     return {
       projectId: input.projectId,
       query: input.query,
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    };
+  }
+
+  buildRecentContextPayload(
+    input: ServerBetaRecentContextRequest,
+  ): Record<string, unknown> {
+    return {
+      projectId: input.projectId,
+      ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
       ...(input.limit !== undefined ? { limit: input.limit } : {}),
     };
   }

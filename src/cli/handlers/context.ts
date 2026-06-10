@@ -15,6 +15,8 @@ import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { logger } from '../../utils/logger.js';
 import { loadFromFileOnce } from '../../shared/hook-settings.js';
 import { readStaleMarker } from '../../shared/oauth-token.js';
+import { resolveRuntimeContext, logServerBetaFallback } from '../../services/hooks/runtime-selector.js';
+import { isServerBetaClientError } from '../../services/hooks/server-beta-client.js';
 
 export const contextHandler: EventHandler = {
   async execute(input: NormalizedHookInput): Promise<HookResult> {
@@ -34,7 +36,49 @@ export const contextHandler: EventHandler = {
       exitCode: HOOK_EXIT_CODES.SUCCESS,
     };
 
-    const contextResult = await executeWithWorkerFallback<string>(apiPath, 'GET');
+    const runtime = resolveRuntimeContext();
+    let contextResult: string | undefined;
+    let useWorkerFallback = runtime.runtime !== 'server-beta';
+    let resolvedRuntime: 'worker' | 'server-beta' = runtime.runtime;
+    let serverBetaContextUrl: string | null = runtime.runtime === 'server-beta' ? runtime.serverBaseUrl : null;
+
+    if (runtime.runtime === 'server-beta') {
+      try {
+        const response = await runtime.client.recentContext({
+          projectId: runtime.projectId,
+          projectName: context.primary,
+          limit: 50,
+        });
+        contextResult = response.context;
+      } catch (error: unknown) {
+        if (isServerBetaClientError(error) && error.isFallbackEligible()) {
+          logServerBetaFallback(error.kind, {
+            status: error.status,
+            message: error.message,
+            route: '/v1/context/recent',
+          });
+          useWorkerFallback = true;
+          resolvedRuntime = 'worker';
+          serverBetaContextUrl = null;
+        } else {
+          logger.error('HOOK', 'Server beta context injection failed (non-recoverable)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return emptyResult;
+        }
+      }
+    }
+
+    if (useWorkerFallback) {
+      const workerResult = await executeWithWorkerFallback<string>(apiPath, 'GET');
+      if (isWorkerFallback(workerResult)) {
+        return emptyResult;
+      }
+      contextResult = workerResult;
+      resolvedRuntime = 'worker';
+      serverBetaContextUrl = null;
+    }
+
     if (isWorkerFallback(contextResult)) {
       return emptyResult;
     }
@@ -61,7 +105,9 @@ export const contextHandler: EventHandler = {
     }
 
     let coloredTimeline = '';
-    if (showTerminalOutput) {
+    if (showTerminalOutput && resolvedRuntime === 'server-beta') {
+      coloredTimeline = additionalContext;
+    } else if (showTerminalOutput) {
       const colorResult = await executeWithWorkerFallback<string>(colorApiPath, 'GET');
       if (!isWorkerFallback(colorResult) && typeof colorResult === 'string') {
         coloredTimeline = colorResult.trim();
@@ -73,7 +119,7 @@ export const contextHandler: EventHandler = {
     const displayContent = coloredTimeline || (platform === 'gemini-cli' || platform === 'gemini' ? additionalContext : '');
 
     const systemMessage = showTerminalOutput && displayContent
-      ? `${displayContent}\n\nView Observations Live @ http://localhost:${port}`
+      ? `${displayContent}\n\nView Observations Live @ ${serverBetaContextUrl ?? `http://localhost:${port}`}`
       : undefined;
 
     return {

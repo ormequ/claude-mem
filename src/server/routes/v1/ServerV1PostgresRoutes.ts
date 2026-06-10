@@ -16,7 +16,10 @@ import {
   type PostgresObservationGenerationJob,
 } from '../../../storage/postgres/generation-jobs.js';
 import { PostgresAuthRepository } from '../../../storage/postgres/auth.js';
-import { PostgresObservationRepository } from '../../../storage/postgres/observations.js';
+import {
+  PostgresObservationRepository,
+  type PostgresObservation,
+} from '../../../storage/postgres/observations.js';
 import { logger } from '../../../utils/logger.js';
 import { requirePostgresServerAuth } from '../../middleware/postgres-auth.js';
 import { requestIdMiddleware } from '../../middleware/request-id.js';
@@ -930,6 +933,43 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         }
       },
     ));
+
+    app.post('/v1/context/recent', readAuth, this.handleCreate(
+      z.object({
+        projectId: z.string().min(1),
+        projectName: z.string().min(1).optional(),
+        limit: z.number().int().positive().max(50).optional(),
+      }),
+      async (req, res, body) => {
+        const teamId = this.requireTeamId(req, res);
+        if (!teamId) return;
+        if (!this.ensureProjectAllowed(req, res, body.projectId)) return;
+        try {
+          const repo = new PostgresObservationRepository(this.options.pool);
+          const results = await repo.listByProject({
+            projectId: body.projectId,
+            teamId,
+            limit: body.limit ?? 50,
+          });
+          const context = renderRecentContext({
+            projectName: body.projectName ?? body.projectId,
+            observations: results,
+          });
+          await this.auditRead(req, 'observation.read', null, body.projectId, {
+            mode: 'recent_context',
+            limit: body.limit ?? 50,
+            resultCount: results.length,
+            observationIds: results.map(o => o.id),
+          });
+          res.status(200).json({
+            observations: results.map(serializeObservation),
+            context,
+          });
+        } catch (error) {
+          this.handleDbError(error, res, 'observation.recent_context');
+        }
+      },
+    ));
   }
 
   private async auditRead(
@@ -1717,6 +1757,62 @@ function serializeObservation(observation: {
     createdAtEpoch: observation.createdAtEpoch,
     updatedAtEpoch: observation.updatedAtEpoch,
   };
+}
+
+function renderRecentContext(input: {
+  projectName: string;
+  observations: PostgresObservation[];
+}): string {
+  const { projectName, observations } = input;
+  const now = new Date();
+  const headerDate = now.toLocaleDateString('en-CA');
+  const headerTime = now.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  }).toLowerCase().replace(' ', '');
+  const lines = [
+    `# [${projectName}] recent context, ${headerDate} ${headerTime}`,
+    '',
+  ];
+  if (observations.length === 0) {
+    lines.push('No previous sessions found.');
+    return lines.join('\n');
+  }
+
+  lines.push('Format: ID TIME KIND CONTENT');
+  lines.push('');
+  let currentDay = '';
+  for (const observation of [...observations].sort((a, b) => a.createdAtEpoch - b.createdAtEpoch)) {
+    const date = new Date(observation.createdAtEpoch);
+    const day = date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    if (day !== currentDay) {
+      currentDay = day;
+      lines.push(`### ${day}`);
+    }
+    const time = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).toLowerCase().replace(' ', '');
+    lines.push(`${shortObservationId(observation.id)} ${time} ${observation.kind} ${compactObservationContent(observation.content)}`);
+  }
+  return lines.join('\n').trimEnd();
+}
+
+function shortObservationId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+function compactObservationContent(content: string): string {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  if (compact.length <= 220) return compact;
+  return `${compact.slice(0, 217)}...`;
 }
 
 interface ObservationWithSourceRow {

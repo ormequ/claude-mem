@@ -155,3 +155,25 @@ Known remaining gaps:
   - `smart_search grpcutil`
   - `query_corpus mks-smoke-test` without Claude OAuth
 - `gh auth status` reports the stored GitHub CLI token for `ormequ` is invalid. SSH push may still work, but opening a PR with `gh` requires `gh auth login -h github.com` or using the GitHub app connector.
+
+## 2026-06-10: server-beta SessionStart context
+
+Root cause for MKS startup context stopping at Jun 8:
+
+- `CLAUDE_MEM_RUNTIME=server-beta` was configured and Postgres contained Jun 9/Jun 10 observations.
+- `SessionStart` context injection still called legacy worker `/api/context/inject`.
+- The worker SQLite context endpoint returned the stale Jun 2/5/7/8 timeline, so Claude startup context did not reflect server-beta Postgres.
+
+Fork fix:
+
+- Added server-beta `POST /v1/context/recent`.
+- Added `ServerBetaClient.recentContext()`.
+- `src/cli/handlers/context.ts` now uses server-beta recent context when `CLAUDE_MEM_RUNTIME=server-beta`, with worker fallback only for transport/missing-config failures.
+- Server-beta terminal output no longer fetches worker colored context or points at `localhost:37701`; it uses the server-beta context and URL.
+
+Remaining mixed-mode migration work:
+
+- `query_corpus` still uses worker corpus routes, though the fork routes OpenRouter-mode queries through OpenRouter-compatible `/chat/completions`.
+- Legacy viewer/search/timeline routes still live under worker `/api/...`.
+- MCP legacy tools such as `search`, `timeline`, and `get_observations` still require worker compatibility.
+- To fully remove worker, add server-beta equivalents for corpus, timeline/search/detail retrieval, update MCP tools to prefer server-beta, then remove worker fallback after live smoke coverage.
