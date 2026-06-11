@@ -17,9 +17,10 @@
  * The fallback chain ORDER is contractual and must not change:
  *   1. ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}   (host-injected env)
  *   2. (mcp only) $PWD/plugin, $PWD               (repo/dev checkout)
- *   3. cache directories (newest first via `ls -dt`)
- *   4. $_C/plugins/marketplaces/ormequ/plugin (fork marketplace install)
- *   5. $_C/plugins/marketplaces/thedotmack/plugin (upstream marketplace fallback)
+ *   3. fork cache directories (newest first via `ls -dt`)
+ *   4. remaining cache directories (newest first via `ls -dt`)
+ *   5. $_C/plugins/marketplaces/ormequ/plugin (fork marketplace install)
+ *   6. $_C/plugins/marketplaces/thedotmack/plugin (upstream marketplace fallback)
  */
 
 export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'mcp';
@@ -122,10 +123,11 @@ function candidateBlock(options: ShellTemplateOptions): string {
   const extraCacheRoots = isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : [];
   const allGlobs = [
     ...extraCacheRoots,
+    '$_C/plugins/cache/ormequ/claude-mem/*fork*',
     '$_C/plugins/cache/ormequ/claude-mem',
     '$_C/plugins/cache/thedotmack/claude-mem',
   ]
-    .map((root) => `"${root}"/[0-9]*/`)
+    .map((root) => root.includes('*') ? `"${root}"/` : `"${root}"/[0-9]*/`)
     .join(' ');
   lines.push(`ls -dt ${allGlobs} 2>/dev/null;`);
   lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/ormequ/plugin";`);
@@ -183,11 +185,16 @@ function shTokenToNode(token: string): string {
  */
 function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
+  const extraCacheRoots = (options.mcpExtraCacheRoots ?? []).map(root => ({
+    expr: shTokenToNode(root),
+    forkOnly: false,
+  }));
   const cacheRoots = [
-    ...(options.mcpExtraCacheRoots ?? []),
-    '$_C/plugins/cache/ormequ/claude-mem',
-    '$_C/plugins/cache/thedotmack/claude-mem',
-  ].map(shTokenToNode);
+    ...extraCacheRoots,
+    { expr: shTokenToNode('$_C/plugins/cache/ormequ/claude-mem'), forkOnly: true },
+    { expr: shTokenToNode('$_C/plugins/cache/ormequ/claude-mem'), forkOnly: false },
+    { expr: shTokenToNode('$_C/plugins/cache/thedotmack/claude-mem'), forkOnly: false },
+  ];
   const marketplaces = [
     shTokenToNode('$_C/plugins/marketplaces/ormequ/plugin'),
     shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin'),
@@ -198,7 +205,7 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const kParts = [
     'E',
     ...candidates,
-    ...cacheRoots.map((root) => `...L(${root})`),
+    ...cacheRoots.map((root) => `...L(${root.expr},${root.forkOnly ? 'true' : 'false'})`),
     ...marketplaces,
   ].join(',');
 
@@ -208,7 +215,7 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
     `const C=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude');` +
     `const E=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT||'';` +
     `const d=process.cwd();` +
-    `const L=x=>{try{return f.readdirSync(x).filter(n=>/^\\d/.test(n)).map(n=>p.join(x,n)).filter(z=>{try{return f.statSync(z).isDirectory()}catch{return false}}).sort((a,b)=>f.statSync(b).mtimeMs-f.statSync(a).mtimeMs)}catch{return[]}};` +
+    `const L=(x,F=false)=>{try{return f.readdirSync(x).filter(n=>/^\\d/.test(n)&&(!F||n.includes('fork'))).map(n=>p.join(x,n)).filter(z=>{try{return f.statSync(z).isDirectory()}catch{return false}}).sort((a,b)=>f.statSync(b).mtimeMs-f.statSync(a).mtimeMs)}catch{return[]}};` +
     `const K=[${kParts}].filter(Boolean);` +
     `let R=null;` +
     `for(const k of K){const r=f.existsSync(p.join(k,'plugin','scripts'))?p.join(k,'plugin'):k;if(f.existsSync(p.join(r,'scripts',${require}))){R=r;break}}` +

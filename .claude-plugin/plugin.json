@@ -1,6 +1,6 @@
 {
   "name": "claude-mem",
-  "version": "13.5.5+fork.20260611.2",
+  "version": "13.5.5+fork.20260611.3",
   "description": "Memory compression system for Claude Code - persist context across sessions",
   "author": {
     "name": "Alex Newman; fork maintained by Ilya Belokobylskii"
