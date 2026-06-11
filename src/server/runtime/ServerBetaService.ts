@@ -20,6 +20,7 @@ import { SessionsObservationsAdapter } from '../compat/SessionsObservationsAdapt
 import { SessionsSummarizeAdapter } from '../compat/SessionsSummarizeAdapter.js';
 import { ActiveServerBetaQueueManager } from './ActiveServerBetaQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
+import { ServerBetaViewerCompatRoutes } from './ServerBetaViewerCompatRoutes.js';
 import type { ServerBetaServiceGraph, ServerBetaQueueLaneMetric } from './types.js';
 
 const SERVER_BETA_RUNTIME = 'server-beta';
@@ -202,6 +203,14 @@ export class ServerBetaService {
       pool: this.graph.postgres.pool,
       endSession: v1Routes.getEndSessionService(),
       authMode: compatAuthMode,
+    }));
+
+    // Server-beta viewer compatibility for the existing worker-oriented UI
+    // bundle. The bundle still calls legacy `/api/...` and `/stream` routes;
+    // serve those from Postgres before mounting static assets.
+    server.registerRoutes(new ServerBetaViewerCompatRoutes({
+      pool: this.graph.postgres.pool,
+      port: this.requestedPort,
     }));
 
     // #2552 — mount the Viewer UI static handler so the viewer loads on the
