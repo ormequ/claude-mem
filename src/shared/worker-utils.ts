@@ -5,7 +5,7 @@ import { spawnHidden } from "./spawn.js";
 import { logger } from "../utils/logger.js";
 import { HOOK_TIMEOUTS, getTimeout } from "./hook-constants.js";
 import { SettingsDefaultsManager, type SettingsDefaults } from "./SettingsDefaultsManager.js";
-import { MARKETPLACE_ROOT, DATA_DIR } from "./paths.js";
+import { MARKETPLACE_ROOT, DATA_DIR, getPackageRoot } from "./paths.js";
 import { loadFromFileOnce } from "./hook-settings.js";
 import { validateWorkerPidFile } from "../supervisor/index.js";
 import { emitBlockingError } from "./hook-io.js";
@@ -204,9 +204,14 @@ async function isWorkerReady(): Promise<boolean> {
 }
 
 function resolveWorkerScriptPath(): string | null {
+  const currentPluginRoot = getPackageRoot();
   const candidates = [
-    path.join(MARKETPLACE_ROOT, 'plugin', 'scripts', 'worker-service.cjs'),
+    process.env.CLAUDE_PLUGIN_ROOT
+      ? path.join(process.env.CLAUDE_PLUGIN_ROOT, 'scripts', 'worker-service.cjs')
+      : '',
+    path.join(currentPluginRoot, 'scripts', 'worker-service.cjs'),
     path.join(process.cwd(), 'plugin', 'scripts', 'worker-service.cjs'),
+    path.join(MARKETPLACE_ROOT, 'plugin', 'scripts', 'worker-service.cjs'),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
