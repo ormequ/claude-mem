@@ -71,26 +71,41 @@ function removeMarketplaceDirectory(): boolean {
 }
 
 function removeCacheDirectory(): boolean {
-  const cacheDirectory = join(pluginsDirectory(), 'cache', 'thedotmack', 'claude-mem');
-  if (existsSync(cacheDirectory)) {
-    rmSync(cacheDirectory, { recursive: true, force: true });
-    return true;
+  let removed = false;
+  for (const marketplace of ['ormequ', 'thedotmack']) {
+    const cacheDirectory = join(pluginsDirectory(), 'cache', marketplace, 'claude-mem');
+    if (existsSync(cacheDirectory)) {
+      rmSync(cacheDirectory, { recursive: true, force: true });
+      removed = true;
+    }
   }
-  return false;
+  return removed;
 }
 
 function removeFromKnownMarketplaces(): void {
   const knownMarketplaces = readJsonSafe<Record<string, any>>(knownMarketplacesPath(), {});
-  if (knownMarketplaces['thedotmack']) {
-    delete knownMarketplaces['thedotmack'];
+  let dirty = false;
+  for (const marketplace of ['ormequ', 'thedotmack']) {
+    if (knownMarketplaces[marketplace]) {
+      delete knownMarketplaces[marketplace];
+      dirty = true;
+    }
+  }
+  if (dirty) {
     writeJsonFileAtomic(knownMarketplacesPath(), knownMarketplaces);
   }
 }
 
 function removeFromInstalledPlugins(): void {
   const installedPlugins = readJsonSafe<Record<string, any>>(installedPluginsPath(), {});
-  if (installedPlugins.plugins?.['claude-mem@thedotmack']) {
-    delete installedPlugins.plugins['claude-mem@thedotmack'];
+  let dirty = false;
+  for (const pluginId of ['claude-mem@ormequ', 'claude-mem@thedotmack']) {
+    if (installedPlugins.plugins?.[pluginId]) {
+      delete installedPlugins.plugins[pluginId];
+      dirty = true;
+    }
+  }
+  if (dirty) {
     writeJsonFileAtomic(installedPluginsPath(), installedPlugins);
   }
 }
@@ -130,9 +145,11 @@ export function removeFromClaudeSettings(): void {
   const settings = readJsonSafe<Record<string, any>>(claudeSettingsPath(), {});
   let dirty = false;
 
-  if (settings.enabledPlugins?.['claude-mem@thedotmack'] !== undefined) {
-    delete settings.enabledPlugins['claude-mem@thedotmack'];
-    dirty = true;
+  for (const pluginId of ['claude-mem@ormequ', 'claude-mem@thedotmack']) {
+    if (settings.enabledPlugins?.[pluginId] !== undefined) {
+      delete settings.enabledPlugins[pluginId];
+      dirty = true;
+    }
   }
 
   // Symmetric counterpart to disableClaudeAutoMemory() in install.ts. The

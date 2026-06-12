@@ -14,7 +14,7 @@ describe('Codex CLI installer config repair', () => {
 
   it('updates existing plugin enablement in place', () => {
     const input = [
-      '[plugins."claude-mem@thedotmack"]',
+      '[plugins."claude-mem@ormequ"]',
       'enabled = true',
       '',
       '[marketplaces.claude-mem-local]',
@@ -22,9 +22,9 @@ describe('Codex CLI installer config repair', () => {
       '',
     ].join('\n');
 
-    const result = setTomlPluginEnabled(input, 'claude-mem@thedotmack', false);
+    const result = setTomlPluginEnabled(input, 'claude-mem@ormequ', false);
 
-    expect(result).toContain('[plugins."claude-mem@thedotmack"]\nenabled = false');
+    expect(result).toContain('[plugins."claude-mem@ormequ"]\nenabled = false');
     expect(result).toContain('[marketplaces.claude-mem-local]');
   });
 

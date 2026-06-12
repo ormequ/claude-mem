@@ -161,7 +161,7 @@ export async function installGeminiCliHooks(): Promise<number> {
   const workerServicePath = findWorkerServicePath();
   if (!workerServicePath) {
     console.error('Could not find worker-service.cjs');
-    console.error('   Expected at: ~/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs');
+    console.error('   Expected at: ~/.claude/plugins/marketplaces/ormequ/plugin/scripts/worker-service.cjs');
     return 1;
   }
 

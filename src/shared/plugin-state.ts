@@ -4,7 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 
-const PLUGIN_SETTINGS_KEY = 'claude-mem@thedotmack';
+const PLUGIN_SETTINGS_KEYS = ['claude-mem@ormequ', 'claude-mem@thedotmack'];
 
 export function isPluginDisabledInClaudeSettings(): boolean {
   try {
@@ -13,7 +13,7 @@ export function isPluginDisabledInClaudeSettings(): boolean {
     if (!existsSync(settingsPath)) return false;
     const raw = readFileSync(settingsPath, 'utf-8');
     const settings = JSON.parse(raw);
-    return settings?.enabledPlugins?.[PLUGIN_SETTINGS_KEY] === false;
+    return PLUGIN_SETTINGS_KEYS.some((key) => settings?.enabledPlugins?.[key] === false);
   } catch (error: unknown) {
     logger.error('CONFIG', 'Failed to read Claude settings', { error: error instanceof Error ? error.message : String(error) });
     return false;

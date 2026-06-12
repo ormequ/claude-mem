@@ -90,15 +90,15 @@ describe('Plugin Distribution - Codex Marketplace', () => {
     const command = mcp.mcpServers['mcp-search'].args.join(' ');
 
     expect(command).toContain('.codex/plugins/cache/claude-mem-local/claude-mem');
-    expect(command).toContain('plugins/cache/thedotmack/claude-mem');
+    expect(command).toContain('plugins/cache/ormequ/claude-mem');
     expect(command).toContain('claude-mem: mcp server not found');
   });
 
   it('MCP launcher prefers Claude plugin cache before Codex cache fallbacks', () => {
     const command = mcpStartupCommandFrom('plugin/.mcp.json');
-    const claudeCache = 'plugins/cache/thedotmack/claude-mem';
+    const claudeCache = 'plugins/cache/ormequ/claude-mem';
     const codexLocalCache = '.codex/plugins/cache/claude-mem-local/claude-mem';
-    const codexMarketplaceCache = '.codex/plugins/cache/thedotmack/claude-mem';
+    const codexMarketplaceCache = '.codex/plugins/cache/ormequ/claude-mem';
 
     expect(command.indexOf(claudeCache)).toBeLessThan(command.indexOf(codexLocalCache));
     expect(command.indexOf(claudeCache)).toBeLessThan(command.indexOf(codexMarketplaceCache));
@@ -120,7 +120,7 @@ describe('Plugin Distribution - hooks.json Integrity', () => {
   });
 
   it('should include CLAUDE_PLUGIN_ROOT fallback in all hook commands (#1215)', () => {
-    const expectedFallbackPath = '$_C/plugins/marketplaces/thedotmack/plugin';
+    const expectedFallbackPath = '$_C/plugins/marketplaces/ormequ/plugin';
 
     for (const command of commandHooksFrom('plugin/hooks/hooks.json')) {
       expect(command).toContain(expectedFallbackPath);
@@ -128,8 +128,8 @@ describe('Plugin Distribution - hooks.json Integrity', () => {
   });
 
   it('should try cache path before marketplaces fallback in all hook commands (#1533)', () => {
-    const cachePath = '$_C/plugins/cache/thedotmack/claude-mem';
-    const marketplacesPath = '$_C/plugins/marketplaces/thedotmack/plugin';
+    const cachePath = '$_C/plugins/cache/ormequ/claude-mem';
+    const marketplacesPath = '$_C/plugins/marketplaces/ormequ/plugin';
 
     for (const command of commandHooksFrom('plugin/hooks/hooks.json')) {
       expect(command).toContain(cachePath);
@@ -149,13 +149,13 @@ describe('Plugin Distribution - Startup Root Resolution', () => {
     expect(command).toContain('.claude');
     expect(command).toContain('CLAUDE_PLUGIN_ROOT');
     expect(command).toContain('PLUGIN_ROOT');
-    expect(command).toContain('plugins/marketplaces/thedotmack/plugin');
-    expect(command).toContain('plugins/cache/thedotmack/claude-mem');
+    expect(command).toContain('plugins/marketplaces/ormequ/plugin');
+    expect(command).toContain('plugins/cache/ormequ/claude-mem');
     expect(command).toContain('mcp-server.cjs');
     // No bare absolute "/scripts/..." path leaks through.
     expect(command).not.toContain('"/scripts/mcp-server.cjs"');
-    expect(command.indexOf('plugins/cache/thedotmack/claude-mem')).toBeLessThan(
-      command.indexOf('plugins/marketplaces/thedotmack/plugin')
+    expect(command.indexOf('plugins/cache/ormequ/claude-mem')).toBeLessThan(
+      command.indexOf('plugins/marketplaces/ormequ/plugin')
     );
   });
 
@@ -164,12 +164,12 @@ describe('Plugin Distribution - Startup Root Resolution', () => {
       expect(command).toContain('${CLAUDE_CONFIG_DIR:-$HOME/.claude}');
       expect(command).toContain('export PATH=');
       expect(command).toContain('while IFS= read -r _R');
-      expect(command).toContain('$_C/plugins/marketplaces/thedotmack/plugin');
-      expect(command).toContain('$_C/plugins/cache/thedotmack/claude-mem');
+      expect(command).toContain('$_C/plugins/marketplaces/ormequ/plugin');
+      expect(command).toContain('$_C/plugins/cache/ormequ/claude-mem');
       expect(command).toContain('[ -f "$_Q/scripts/');
       expect(command).toContain('command -v cygpath');
-      expect(command.indexOf('$_C/plugins/cache/thedotmack/claude-mem')).toBeLessThan(
-        command.indexOf('$_C/plugins/marketplaces/thedotmack/plugin')
+      expect(command.indexOf('$_C/plugins/cache/ormequ/claude-mem')).toBeLessThan(
+        command.indexOf('$_C/plugins/marketplaces/ormequ/plugin')
       );
     }
   });
@@ -178,8 +178,8 @@ describe('Plugin Distribution - Startup Root Resolution', () => {
     for (const command of commandHooksFrom('plugin/hooks/hooks.json')) {
       expect(command).toContain('${CLAUDE_CONFIG_DIR:-$HOME/.claude}');
       expect(command).toContain('while IFS= read -r _R');
-      expect(command).toContain('$_C/plugins/marketplaces/thedotmack/plugin');
-      expect(command).toContain('$_C/plugins/cache/thedotmack/claude-mem');
+      expect(command).toContain('$_C/plugins/marketplaces/ormequ/plugin');
+      expect(command).toContain('$_C/plugins/cache/ormequ/claude-mem');
       expect(command).toContain('[ -f "$_Q/scripts/');
       expect(command).not.toContain('$HOME/.claude/plugins/');
     }
@@ -293,7 +293,7 @@ const MCP_EXPECTED = buildShellCommand({
   mcpExtraCandidates: ['$PWD/plugin', '$PWD'],
   mcpExtraCacheRoots: [
     '$HOME/.codex/plugins/cache/claude-mem-local/claude-mem',
-    '$HOME/.codex/plugins/cache/thedotmack/claude-mem',
+    '$HOME/.codex/plugins/cache/ormequ/claude-mem',
   ],
 });
 
@@ -385,7 +385,7 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
 
   it('resolves _P from the cache directory when CLAUDE_PLUGIN_ROOT is unset', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'cm-home-'));
-    const cacheRoot = path.join(home, '.claude', 'plugins', 'cache', 'thedotmack', 'claude-mem', '99.0.0');
+    const cacheRoot = path.join(home, '.claude', 'plugins', 'cache', 'ormequ', 'claude-mem', '99.0.0');
     mkdirSync(path.join(cacheRoot, 'scripts'), { recursive: true });
     writeFileSync(path.join(cacheRoot, 'scripts', 'version-check.js'), '');
     writeFileSync(path.join(cacheRoot, 'scripts', 'bun-runner.js'), '');

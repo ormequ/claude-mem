@@ -73,7 +73,7 @@ function isPluginDisabledInClaudeSettings() {
     return Boolean(
       settings &&
       settings.enabledPlugins &&
-      settings.enabledPlugins['claude-mem@thedotmack'] === false
+      settings.enabledPlugins['claude-mem@ormequ'] === false
     );
   } catch {
     return false;
