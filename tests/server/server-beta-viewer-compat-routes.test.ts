@@ -20,12 +20,12 @@ function fakePool() {
     platform_source: 'claude-code',
   }];
   const prompts = [{
-    id: 'prompt-1',
+    id: 'session-1',
     content_session_id: 'content-1',
     project_name: 'MKS',
     platform_source: 'claude-code',
     prompt_number: 1,
-    prompt_text: 'show viewer events',
+    prompt_text: 'show viewer events from session metadata',
     occurred_at: new Date('2026-06-10T11:59:00.000Z'),
   }];
 
@@ -40,7 +40,7 @@ function fakePool() {
       if (sql.includes('FROM observations o')) {
         return { rows: observations };
       }
-      if (sql.includes('FROM agent_events e')) {
+      if (sql.includes('metadata->>\'prompt\'')) {
         return { rows: prompts };
       }
       if (sql.includes('FROM server_sessions')) {
@@ -85,8 +85,7 @@ describe('ServerBetaViewerCompatRoutes', () => {
       startedAt: Date.now() - 1000,
     }));
     server.finalizeRoutes();
-    const port = 43000 + Math.floor(Math.random() * 9000);
-    await server.listen(port, '127.0.0.1');
+    await server.listen(0, '127.0.0.1');
     const address = server.getHttpServer()?.address();
     if (!address || typeof address === 'string') throw new Error('server did not bind');
     return address.port;
@@ -108,7 +107,7 @@ describe('ServerBetaViewerCompatRoutes', () => {
     const prompts = await fetch(`http://127.0.0.1:${port}/api/prompts?limit=20`);
     expect(prompts.status).toBe(200);
     const promptsBody = await prompts.json();
-    expect(promptsBody.items[0].prompt_text).toBe('show viewer events');
+    expect(promptsBody.items[0].prompt_text).toBe('show viewer events from session metadata');
 
     const promptSearch = await fetch(`http://127.0.0.1:${port}/api/search/prompts?limit=20`);
     expect(promptSearch.status).toBe(200);

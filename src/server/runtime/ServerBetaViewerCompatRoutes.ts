@@ -234,24 +234,42 @@ export class ServerBetaViewerCompatRoutes implements RouteHandler {
   private async listPrompts(input: { offset: number; limit: number; project?: string }): Promise<PromptViewerRow[]> {
     const result = await this.options.pool.query<PromptViewerRow>(
       `
-        SELECT
-          e.id,
-          s.content_session_id,
-          p.name AS project_name,
-          COALESCE(e.platform_source, s.platform_source, 'claude-code') AS platform_source,
-          COALESCE((e.payload->>'promptNumber')::int, (e.payload->>'prompt_number')::int) AS prompt_number,
-          COALESCE(e.payload->>'prompt', e.payload->>'user_prompt', e.payload->>'text') AS prompt_text,
-          e.occurred_at
-        FROM agent_events e
-        INNER JOIN projects p ON p.id = e.project_id AND p.team_id = e.team_id
-        LEFT JOIN server_sessions s ON s.id = e.server_session_id
-        WHERE ($1::text IS NULL OR p.name = $1 OR p.id = $1)
-          AND (
-            e.event_type IN ('user_prompt', 'prompt', 'session_start')
-            OR e.payload ? 'prompt'
-            OR e.payload ? 'user_prompt'
-          )
-        ORDER BY e.occurred_at DESC
+        SELECT *
+        FROM (
+          SELECT
+            s.id,
+            s.content_session_id,
+            p.name AS project_name,
+            COALESCE(s.platform_source, 'claude-code') AS platform_source,
+            1 AS prompt_number,
+            s.metadata->>'prompt' AS prompt_text,
+            s.started_at AS occurred_at
+          FROM server_sessions s
+          INNER JOIN projects p ON p.id = s.project_id AND p.team_id = s.team_id
+          WHERE ($1::text IS NULL OR p.name = $1 OR p.id = $1)
+            AND NULLIF(s.metadata->>'prompt', '') IS NOT NULL
+
+          UNION ALL
+
+          SELECT
+            e.id,
+            s.content_session_id,
+            p.name AS project_name,
+            COALESCE(e.platform_source, s.platform_source, 'claude-code') AS platform_source,
+            COALESCE((e.payload->>'promptNumber')::int, (e.payload->>'prompt_number')::int) AS prompt_number,
+            COALESCE(e.payload->>'prompt', e.payload->>'user_prompt', e.payload->>'text') AS prompt_text,
+            e.occurred_at
+          FROM agent_events e
+          INNER JOIN projects p ON p.id = e.project_id AND p.team_id = e.team_id
+          LEFT JOIN server_sessions s ON s.id = e.server_session_id
+          WHERE ($1::text IS NULL OR p.name = $1 OR p.id = $1)
+            AND (
+              e.event_type IN ('user_prompt', 'prompt', 'session_start')
+              OR e.payload ? 'prompt'
+              OR e.payload ? 'user_prompt'
+            )
+        ) prompts
+        ORDER BY occurred_at DESC
         OFFSET $2
         LIMIT $3
       `,
