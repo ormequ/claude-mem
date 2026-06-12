@@ -178,8 +178,8 @@ function shTokenToNode(token: string): string {
 function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
   const cacheRoots = [
-    ...(options.mcpExtraCacheRoots ?? []),
     '$_C/plugins/cache/thedotmack/claude-mem',
+    ...(options.mcpExtraCacheRoots ?? []),
   ].map(shTokenToNode);
   const marketplace = shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin');
   const require = JSON.stringify(options.requireFile);

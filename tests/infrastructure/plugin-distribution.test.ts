@@ -93,6 +93,16 @@ describe('Plugin Distribution - Codex Marketplace', () => {
     expect(command).toContain('plugins/cache/thedotmack/claude-mem');
     expect(command).toContain('claude-mem: mcp server not found');
   });
+
+  it('MCP launcher prefers Claude plugin cache before Codex cache fallbacks', () => {
+    const command = mcpStartupCommandFrom('plugin/.mcp.json');
+    const claudeCache = 'plugins/cache/thedotmack/claude-mem';
+    const codexLocalCache = '.codex/plugins/cache/claude-mem-local/claude-mem';
+    const codexMarketplaceCache = '.codex/plugins/cache/thedotmack/claude-mem';
+
+    expect(command.indexOf(claudeCache)).toBeLessThan(command.indexOf(codexLocalCache));
+    expect(command.indexOf(claudeCache)).toBeLessThan(command.indexOf(codexMarketplaceCache));
+  });
 });
 
 describe('Plugin Distribution - hooks.json Integrity', () => {
