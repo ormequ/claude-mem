@@ -5,14 +5,25 @@ import type { CorpusFile, QueryResult } from './types.js';
 import { logger } from '../../../utils/logger.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, OBSERVER_SESSIONS_DIR, ensureDir } from '../../../shared/paths.js';
-import { buildIsolatedEnvWithFreshOAuth } from '../../../shared/EnvManager.js';
+import { buildIsolatedEnvWithFreshOAuth, getCredential } from '../../../shared/EnvManager.js';
 import { findClaudeExecutable } from '../../../shared/find-claude-executable.js';
 import { sanitizeEnv } from '../../../supervisor/env-sanitizer.js';
 import { resolveTierAlias } from '../model-aliases.js';
+import { resolveOpenRouterChatCompletionsUrl } from '../../../shared/openrouter-base-url.js';
 
-// @ts-ignore - Agent SDK types may not be available
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildHardenedSdkOptions } from '../../../sdk/hardened-options.js';
+
+type ClaudeAgentSdk = {
+  query: (input: {
+    prompt: string;
+    options: ReturnType<typeof buildHardenedSdkOptions>;
+  }) => AsyncIterable<any>;
+};
+
+async function loadClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
+  // @ts-ignore - Agent SDK types may not be available
+  return await import('@anthropic-ai/claude-agent-sdk');
+}
 
 export class KnowledgeAgent {
   private renderer: CorpusRenderer;
@@ -24,6 +35,23 @@ export class KnowledgeAgent {
   }
 
   async prime(corpus: CorpusFile): Promise<string> {
+    if (this.useOpenRouterCorpusMode()) {
+      const result = await this.queryOpenRouterCorpus(corpus, [
+        corpus.system_prompt,
+        '',
+        'Here is your complete knowledge base:',
+        '',
+        this.renderer.renderCorpus(corpus),
+        '',
+        'Acknowledge what you have received. Summarize the key themes and topics you can answer questions about.'
+      ].join('\n'));
+      const sessionId = `openrouter-corpus-${corpus.name}-${Date.now()}`;
+      corpus.session_id = sessionId;
+      this.corpusStore.write(corpus);
+      logger.info('WORKER', `Knowledge agent primed for corpus "${corpus.name}" via OpenRouter-compatible chat completions`);
+      return sessionId;
+    }
+
     const renderedCorpus = this.renderer.renderCorpus(corpus);
 
     const primePrompt = [
@@ -40,6 +68,7 @@ export class KnowledgeAgent {
     const claudePath = findClaudeExecutable('WORKER');
     const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
 
+    const { query } = await loadClaudeAgentSdk();
     const queryResult = query({
       prompt: primePrompt,
       options: buildHardenedSdkOptions({
@@ -84,6 +113,11 @@ export class KnowledgeAgent {
   async query(corpus: CorpusFile, question: string): Promise<QueryResult> {
     if (!corpus.session_id) {
       throw new Error(`Corpus "${corpus.name}" has no session — call prime first`);
+    }
+
+    if (this.useOpenRouterCorpusMode()) {
+      const result = await this.queryOpenRouterCorpus(corpus, question);
+      return { answer: result.answer, session_id: corpus.session_id };
     }
 
     try {
@@ -132,6 +166,7 @@ export class KnowledgeAgent {
     const claudePath = findClaudeExecutable('WORKER');
     const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
 
+    const { query } = await loadClaudeAgentSdk();
     const queryResult = query({
       prompt: question,
       options: buildHardenedSdkOptions({
@@ -176,6 +211,59 @@ export class KnowledgeAgent {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     // Resolve $TIER:<fast|smart|simple|summary> aliases at request time (#2289).
     return resolveTierAlias(settings.CLAUDE_MEM_MODEL, settings);
+  }
+
+  private useOpenRouterCorpusMode(): boolean {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    return settings.CLAUDE_MEM_PROVIDER === 'openrouter';
+  }
+
+  private async queryOpenRouterCorpus(corpus: CorpusFile, prompt: string): Promise<QueryResult> {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const apiKey = settings.CLAUDE_MEM_OPENROUTER_API_KEY || getCredential('OPENROUTER_API_KEY') || '';
+    if (!apiKey) {
+      throw new Error('OpenRouter API key not configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
+    }
+
+    const model = settings.CLAUDE_MEM_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
+    const apiUrl = resolveOpenRouterChatCompletionsUrl(settings.CLAUDE_MEM_OPENROUTER_BASE_URL || process.env.OPENROUTER_BASE_URL || '');
+    const renderedCorpus = this.renderer.renderCorpus(corpus);
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+        ...(settings.CLAUDE_MEM_OPENROUTER_SITE_URL ? { 'HTTP-Referer': settings.CLAUDE_MEM_OPENROUTER_SITE_URL } : {}),
+        ...(settings.CLAUDE_MEM_OPENROUTER_APP_NAME ? { 'X-Title': settings.CLAUDE_MEM_OPENROUTER_APP_NAME } : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: corpus.system_prompt },
+          {
+            role: 'user',
+            content: [
+              'Use this knowledge corpus as the historical context for all answers:',
+              '',
+              renderedCorpus,
+            ].join('\n'),
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`OpenRouter corpus query failed (${response.status}): ${body.slice(0, 500)}`);
+    }
+
+    const data = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const answer = data.choices?.[0]?.message?.content ?? '';
+    return { answer, session_id: corpus.session_id ?? `openrouter-corpus-${corpus.name}` };
   }
 
 }

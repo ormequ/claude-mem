@@ -522,7 +522,7 @@ function runBatchQuery(queryFile: string, sourceFiles: string[], grammarPath: st
   if (sourceFiles.length === 0) return new Map();
 
   const bin = getTreeSitterBin();
-  const execArgs = ["query", "-p", grammarPath, queryFile, ...sourceFiles];
+  const execArgs = ["query", "--grammar-path", grammarPath, queryFile, ...sourceFiles];
 
   let output: string;
   try {

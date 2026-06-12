@@ -53,3 +53,4 @@ docker/install-test/
 
 # Local session report artifacts (not part of distribution)
 reports/
+dumps/
