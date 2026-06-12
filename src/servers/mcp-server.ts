@@ -40,7 +40,6 @@ import {
 } from '../services/hooks/runtime-selector.js';
 import {
   buildServerBetaObservationAddRequest,
-  normalizeServerBetaProjectId,
 } from './mcp-server-beta-normalize.js';
 
 let mcpServerDirResolutionFailed = false;
@@ -267,7 +266,7 @@ async function handleObservationAdd(
       throw new Error('observation_add: "content" is required');
     }
     const request: ServerBetaAddObservationRequest = buildServerBetaObservationAddRequest({
-      projectId: args.projectId,
+      projectId: await ctx.client.resolveProjectId(args.projectId, ctx.projectId),
       settingsProjectId: ctx.projectId,
       content: args.content,
       ...(args.serverSessionId !== undefined ? { serverSessionId: args.serverSessionId } : {}),
@@ -301,7 +300,7 @@ async function handleObservationRecordEvent(
     if (typeof args?.eventType !== 'string' || args.eventType.trim().length === 0) {
       throw new Error('observation_record_event: "eventType" is required');
     }
-    const projectId = normalizeServerBetaProjectId(args.projectId, ctx.projectId);
+    const projectId = await ctx.client.resolveProjectId(args.projectId, ctx.projectId);
     const request: ServerBetaRecordEventRequest = {
       projectId,
       sourceType: args.sourceType ?? 'api',
@@ -334,7 +333,7 @@ async function handleObservationSearch(
     if (typeof args?.query !== 'string' || args.query.trim().length === 0) {
       throw new Error('observation_search: "query" is required');
     }
-    const projectId = normalizeServerBetaProjectId(args.projectId, ctx.projectId);
+    const projectId = await ctx.client.resolveProjectId(args.projectId, ctx.projectId);
     const request: ServerBetaSearchObservationsRequest = {
       projectId,
       query: args.query,
@@ -361,7 +360,7 @@ async function handleObservationContext(
     if (typeof args?.query !== 'string' || args.query.trim().length === 0) {
       throw new Error('observation_context: "query" is required');
     }
-    const projectId = normalizeServerBetaProjectId(args.projectId, ctx.projectId);
+    const projectId = await ctx.client.resolveProjectId(args.projectId, ctx.projectId);
     const request: ServerBetaContextObservationsRequest = {
       projectId,
       query: args.query,

@@ -57,8 +57,9 @@ export const sessionInitHandler: EventHandler = {
     const runtime = resolveRuntimeContext();
     if (runtime.runtime === 'server-beta') {
       try {
+        const projectId = await runtime.client.resolveProjectId(project, runtime.projectId);
         await runtime.client.startSession({
-          projectId: runtime.projectId,
+          projectId,
           externalSessionId: sessionId,
           contentSessionId: sessionId,
           agentId: input.agentId ?? null,

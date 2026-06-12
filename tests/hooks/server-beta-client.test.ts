@@ -269,6 +269,46 @@ describe('ServerBetaClient', () => {
     expect(result.context).toContain('latest startup context');
   });
 
+  it('resolveProjectId keeps UUIDs and resolves project aliases by name', async () => {
+    installFetch(async (req) => {
+      if (req.url === 'http://localhost:9999/v1/projects' && req.method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            projects: [
+              { id: 'default-project', name: 'local-hook-project' },
+              { id: 'mks-project', name: 'MKS' },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected request ${req.method} ${req.url}`);
+    });
+    const client = new ServerBetaClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
+
+    expect(await client.resolveProjectId('11111111-2222-4333-8444-555555555555', 'default-project'))
+      .toBe('11111111-2222-4333-8444-555555555555');
+    expect(await client.resolveProjectId('MKS', 'default-project')).toBe('mks-project');
+    expect(captured.map(req => req.url)).toEqual(['http://localhost:9999/v1/projects']);
+  });
+
+  it('resolveProjectId creates a named project when it does not exist', async () => {
+    installFetch(async (req) => {
+      if (req.url === 'http://localhost:9999/v1/projects' && req.method === 'GET') {
+        return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+      }
+      if (req.url === 'http://localhost:9999/v1/projects' && req.method === 'POST') {
+        expect((req.body as Record<string, unknown>).name).toBe('MKS');
+        return new Response(JSON.stringify({ project: { id: 'created-mks', name: 'MKS' } }), { status: 201 });
+      }
+      throw new Error(`unexpected request ${req.method} ${req.url}`);
+    });
+    const client = new ServerBetaClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
+
+    expect(await client.resolveProjectId('MKS', 'default-project')).toBe('created-mks');
+    expect(captured.map(req => req.method)).toEqual(['GET', 'POST']);
+  });
+
 
   it('getJobStatus sends GET /v1/jobs/:id', async () => {
     installFetch(async () => new Response(

@@ -5,10 +5,12 @@ import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test';
 import * as realHookSettings from '../../src/shared/hook-settings.js';
 import * as realLogger from '../../src/utils/logger.js';
 import * as realWorkerUtils from '../../src/shared/worker-utils.js';
+import * as realRuntimeSelector from '../../src/services/hooks/runtime-selector.js';
 
 const realHookSettingsSnapshot = { ...realHookSettings };
 const realLoggerSnapshot = { ...realLogger };
 const realWorkerUtilsSnapshot = { ...realWorkerUtils };
+const realRuntimeSelectorSnapshot = { ...realRuntimeSelector };
 
 let mockSettings: Record<string, string> = {};
 let workerCalls = 0;
@@ -46,6 +48,10 @@ mock.module('../../src/services/hooks/runtime-selector.js', () => ({
     projectId: mockSettings.CLAUDE_MEM_SERVER_BETA_PROJECT_ID,
     serverBaseUrl: mockSettings.CLAUDE_MEM_SERVER_BETA_URL,
     client: {
+      async resolveProjectId(projectNameOrId: string | undefined | null, defaultProjectId: string) {
+        expect(projectNameOrId).toBe('MKS');
+        return defaultProjectId;
+      },
       async recentContext(input: { projectId: string; projectName?: string; limit?: number }) {
       expect(input.projectId).toBe('project-uuid');
       expect(input.projectName).toBe('MKS');
@@ -61,6 +67,7 @@ afterAll(() => {
   mock.module('../../src/shared/hook-settings.js', () => realHookSettingsSnapshot);
   mock.module('../../src/utils/logger.js', () => realLoggerSnapshot);
   mock.module('../../src/shared/worker-utils.js', () => realWorkerUtilsSnapshot);
+  mock.module('../../src/services/hooks/runtime-selector.js', () => realRuntimeSelectorSnapshot);
 });
 
 describe('contextHandler server-beta runtime', () => {

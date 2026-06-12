@@ -8,6 +8,7 @@ import { logger } from '../../utils/logger.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { shouldTrackProject } from '../../shared/should-track-project.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
+import { getProjectContext } from '../../utils/project-name.js';
 import { resolveRuntimeContext, logServerBetaFallback } from '../../services/hooks/runtime-selector.js';
 import { isServerBetaClientError } from '../../services/hooks/server-beta-client.js';
 
@@ -63,8 +64,10 @@ export const observationHandler: EventHandler = {
     const runtime = resolveRuntimeContext();
     if (runtime.runtime === 'server-beta') {
       try {
+        const project = getProjectContext(cwd).primary;
+        const projectId = await runtime.client.resolveProjectId(project, runtime.projectId);
         await runtime.client.recordEvent({
-          projectId: runtime.projectId,
+          projectId,
           contentSessionId: sessionId,
           sourceType: 'hook',
           eventType: 'tool_use',
@@ -77,6 +80,7 @@ export const observationHandler: EventHandler = {
             agentId: input.agentId,
             agentType: input.agentType,
             platformSource,
+            project,
           },
         });
         logger.debug('HOOK', 'Observation sent successfully via server-beta', { toolName });

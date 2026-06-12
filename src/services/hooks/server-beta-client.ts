@@ -210,10 +210,28 @@ export interface ServerBetaJobStatusResponse {
   };
 }
 
+export interface ServerBetaProject {
+  id: string;
+  name: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ServerBetaListProjectsResponse {
+  projects: ServerBetaProject[];
+}
+
+export interface ServerBetaCreateProjectResponse {
+  project: ServerBetaProject;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export class ServerBetaClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
+  private readonly projectIdByName = new Map<string, string>();
 
   constructor(config: ServerBetaClientConfig) {
     this.baseUrl = stripTrailingSlash(config.serverBaseUrl);
@@ -302,6 +320,39 @@ export class ServerBetaClient {
       'GET',
       `/v1/jobs/${encodeURIComponent(jobId)}`,
     );
+  }
+
+  async listProjects(): Promise<ServerBetaListProjectsResponse> {
+    return this.request<ServerBetaListProjectsResponse>('GET', '/v1/projects');
+  }
+
+  async createProject(name: string): Promise<ServerBetaCreateProjectResponse> {
+    return this.request<ServerBetaCreateProjectResponse>(
+      'POST',
+      '/v1/projects',
+      { name, metadata: { source: 'claude-mem-hook-resolver' } },
+    );
+  }
+
+  async resolveProjectId(projectNameOrId: string | undefined | null, defaultProjectId: string): Promise<string> {
+    const requested = projectNameOrId?.trim();
+    if (!requested) return defaultProjectId;
+    if (UUID_RE.test(requested)) return requested;
+
+    const cacheKey = requested.toLowerCase();
+    const cached = this.projectIdByName.get(cacheKey);
+    if (cached) return cached;
+
+    const listed = await this.listProjects();
+    const existing = listed.projects.find(project => project.name.toLowerCase() === cacheKey);
+    if (existing?.id) {
+      this.projectIdByName.set(cacheKey, existing.id);
+      return existing.id;
+    }
+
+    const created = await this.createProject(requested);
+    this.projectIdByName.set(cacheKey, created.project.id);
+    return created.project.id;
   }
 
   buildAddObservationPayload(

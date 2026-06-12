@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { parseFile, unfoldSymbol } from '../../src/services/smart-file-read/parser.js';
 import { searchCodebase, formatSearchResults } from '../../src/services/smart-file-read/search.js';
 
 describe('smart-file-read fork fixes', () => {
@@ -30,5 +31,22 @@ describe('smart-file-read fork fixes', () => {
   it('uses tree-sitter-cli 0.26 compatible --grammar-path argument order', () => {
     const source = readFileSync(join(import.meta.dir, '../../src/services/smart-file-read/parser.ts'), 'utf-8');
     expect(source).toContain('["query", "--grammar-path", grammarPath, queryFile, ...sourceFiles]');
+  });
+
+  it('parses and unfolds Go functions through tree-sitter', () => {
+    const source = [
+      'package grpcutil',
+      '',
+      'func DialTarget() string {',
+      '  return "ok"',
+      '}',
+      '',
+    ].join('\n');
+
+    const parsed = parseFile(source, 'grpcutil.go', process.cwd());
+
+    expect(parsed.language).toBe('go');
+    expect(parsed.symbols.map((symbol) => symbol.name)).toContain('DialTarget');
+    expect(unfoldSymbol(source, 'grpcutil.go', 'DialTarget', process.cwd())).toContain('func DialTarget() string');
   });
 });

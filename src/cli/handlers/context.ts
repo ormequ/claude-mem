@@ -44,8 +44,9 @@ export const contextHandler: EventHandler = {
 
     if (runtime.runtime === 'server-beta') {
       try {
+        const projectId = await runtime.client.resolveProjectId(context.primary, runtime.projectId);
         const response = await runtime.client.recentContext({
-          projectId: runtime.projectId,
+          projectId,
           projectName: context.primary,
           limit: 50,
         });

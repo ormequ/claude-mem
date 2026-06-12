@@ -4,6 +4,7 @@ import type { Application, Request, Response } from 'express';
 import { z, type ZodTypeAny } from 'zod';
 import type { RouteHandler } from '../../../services/server/Server.js';
 import { CreateAgentEventSchema } from '../../../core/schemas/agent-event.js';
+import { CreateProjectSchema } from '../../../core/schemas/project.js';
 import type { PostgresPool } from '../../../storage/postgres/pool.js';
 import {
   PostgresAgentEventsRepository,
@@ -16,6 +17,7 @@ import {
   type PostgresObservationGenerationJob,
 } from '../../../storage/postgres/generation-jobs.js';
 import { PostgresAuthRepository } from '../../../storage/postgres/auth.js';
+import { PostgresProjectsRepository } from '../../../storage/postgres/projects.js';
 import {
   PostgresObservationRepository,
   type PostgresObservation,
@@ -150,6 +152,49 @@ export class ServerV1PostgresRoutes implements RouteHandler {
       allowLocalDevBypass: this.options.allowLocalDevBypass,
       requiredScopes: ['memories:read'],
     });
+
+    app.get('/v1/projects', readAuth, this.asyncHandler(async (req, res) => {
+      const teamId = this.requireTeamId(req, res);
+      if (!teamId) return;
+      const repo = new PostgresProjectsRepository(this.options.pool);
+      const projects = req.authContext?.projectId
+        ? [await repo.getByIdForTeam(req.authContext.projectId, teamId)].filter(project => project !== null)
+        : await repo.listByTeam(teamId);
+      res.json({ projects });
+    }));
+
+    app.post('/v1/projects', writeAuth, this.asyncHandler(async (req, res) => {
+      const result = CreateProjectSchema.safeParse(req.body);
+      if (!result.success) {
+        res.status(400).json({ error: 'ValidationError', issues: result.error.issues });
+        return;
+      }
+      if (req.authContext?.projectId) {
+        res.status(403).json({ error: 'Forbidden', message: 'Project-scoped API keys cannot create projects' });
+        return;
+      }
+      const teamId = this.requireTeamId(req, res);
+      if (!teamId) return;
+      const repo = new PostgresProjectsRepository(this.options.pool);
+      const existing = await repo.getByNameForTeam(result.data.name, teamId);
+      if (existing) {
+        res.status(200).json({ project: existing });
+        return;
+      }
+      try {
+        const project = await repo.create({
+          teamId,
+          name: result.data.name,
+          metadata: result.data.metadata ?? {},
+        });
+        await this.auditWrite(req, 'project.created', project.id, project.id, {
+          projectName: project.name,
+        });
+        res.status(201).json({ project });
+      } catch (error) {
+        this.handleDbError(error, res, 'project.create');
+      }
+    }));
 
     // POST /v1/events — single event with optional async generation
     app.post('/v1/events', writeAuth, this.asyncHandler(async (req, res) => {

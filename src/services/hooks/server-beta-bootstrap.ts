@@ -8,8 +8,8 @@
 //
 // Bootstrapping flow:
 //   1. Connect to Postgres (CLAUDE_MEM_SERVER_DATABASE_URL).
-//   2. Find or create a "local-hook" team and project so the api_key has
-//      proper tenant scope.
+//   2. Find or create a "local-hook" team and default project. The api_key is
+//      team-scoped so local hooks can create/resolve per-workspace projects.
 //   3. Generate a `cmem_<random>` key, hash with SHA-256, insert into
 //      `api_keys` with the scopes hooks need: events:write, sessions:write,
 //      observations:read, jobs:read.
@@ -70,7 +70,7 @@ export async function bootstrapServerBetaApiKey(
     const created = await repo.createApiKey({
       keyHash,
       teamId,
-      projectId,
+      projectId: null,
       actorId: LOCAL_HOOK_ACTOR_ID,
       scopes: [...HOOK_API_KEY_SCOPES],
     });
