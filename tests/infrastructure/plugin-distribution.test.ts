@@ -208,6 +208,22 @@ describe('Plugin Distribution - Build Script Verification', () => {
     expect(content).toContain('plugin/hooks/hooks.json');
     expect(content).toContain('plugin/.claude-plugin/plugin.json');
   });
+
+  it('should use the ormequ marketplace namespace in active install helpers', () => {
+    const activeHelperPaths = [
+      'src/npx-cli/utils/paths.ts',
+      'scripts/sync-marketplace.cjs',
+      'scripts/sync-to-marketplace.sh',
+      'Dockerfile.test-installer',
+    ];
+
+    for (const relativePath of activeHelperPaths) {
+      const content = readFileSync(path.join(projectRoot, relativePath), 'utf-8');
+      expect(content).toContain('ormequ');
+      expect(content).not.toContain('plugins/marketplaces/thedotmack');
+      expect(content).not.toContain('plugins/cache/thedotmack');
+    }
+  });
 });
 
 describe('Plugin Distribution - Setup Hook (#1547)', () => {

@@ -515,7 +515,17 @@ interface RawMatch {
 
 function runQuery(queryFile: string, sourceFile: string, grammarPath: string): RawMatch[] {
   const result = runBatchQuery(queryFile, [sourceFile], grammarPath);
-  return result.get(sourceFile) || [];
+  const exactMatches = result.get(sourceFile);
+  if (exactMatches) return exactMatches;
+
+  // tree-sitter may canonicalize macOS temp paths (for example /var to
+  // /private/var), so a single-file query can legitimately come back under a
+  // different path string than the one we passed in.
+  if (result.size === 1) {
+    return result.values().next().value ?? [];
+  }
+
+  return [];
 }
 
 function runBatchQuery(queryFile: string, sourceFiles: string[], grammarPath: string): Map<string, RawMatch[]> {
@@ -526,7 +536,12 @@ function runBatchQuery(queryFile: string, sourceFiles: string[], grammarPath: st
 
   let output: string;
   try {
-    output = execFileSync(bin, execArgs, { encoding: "utf-8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"] });
+    output = execFileSync(bin, execArgs, {
+      encoding: "utf-8",
+      timeout: 30000,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
   } catch (error) {
     logger.debug('WORKER', `tree-sitter query failed for ${sourceFiles.length} file(s)`, undefined, error instanceof Error ? error : undefined);
     return new Map();
