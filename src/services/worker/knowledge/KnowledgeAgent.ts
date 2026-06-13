@@ -1,7 +1,7 @@
 
 import { CorpusStore } from './CorpusStore.js';
 import { CorpusRenderer } from './CorpusRenderer.js';
-import type { CorpusFile, QueryResult } from './types.js';
+import type { CorpusFile, PrimeCorpusResult, QueryResult } from './types.js';
 import { logger } from '../../../utils/logger.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, OBSERVER_SESSIONS_DIR, ensureDir } from '../../../shared/paths.js';
@@ -20,6 +20,12 @@ type ClaudeAgentSdk = {
   }) => AsyncIterable<any>;
 };
 
+type PrimeJob = {
+  status: 'pending' | 'error';
+  promise: Promise<string>;
+  error?: string;
+};
+
 async function loadClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
   // @ts-ignore - Agent SDK types may not be available
   return await import('@anthropic-ai/claude-agent-sdk');
@@ -27,11 +33,70 @@ async function loadClaudeAgentSdk(): Promise<ClaudeAgentSdk> {
 
 export class KnowledgeAgent {
   private renderer: CorpusRenderer;
+  private primeJobs = new Map<string, PrimeJob>();
 
   constructor(
     private corpusStore: CorpusStore
   ) {
     this.renderer = new CorpusRenderer();
+  }
+
+  async requestPrime(corpus: CorpusFile): Promise<PrimeCorpusResult> {
+    if (corpus.session_id) {
+      logger.info('WORKER', `Knowledge agent already primed for corpus "${corpus.name}"`);
+      return {
+        name: corpus.name,
+        status: 'ready',
+        session_id: corpus.session_id,
+      };
+    }
+
+    const existingJob = this.primeJobs.get(corpus.name);
+    if (existingJob?.status === 'pending') {
+      return {
+        name: corpus.name,
+        status: 'pending',
+        message: 'Corpus priming is still running. Call prime_corpus again in ~30 seconds.',
+        retry_after_seconds: 30,
+      };
+    }
+
+    if (existingJob?.status === 'error') {
+      this.primeJobs.delete(corpus.name);
+      return {
+        name: corpus.name,
+        status: 'error',
+        message: 'Corpus priming failed in background. Call prime_corpus again to retry.',
+        error: existingJob.error ?? 'Unknown error',
+      };
+    }
+
+    const job: PrimeJob = {
+      status: 'pending',
+      promise: this.prime(corpus),
+    };
+    this.primeJobs.set(corpus.name, job);
+
+    job.promise.then(
+      () => {
+        if (this.primeJobs.get(corpus.name) === job) {
+          this.primeJobs.delete(corpus.name);
+        }
+      },
+      (error) => {
+        if (this.primeJobs.get(corpus.name) !== job) return;
+        job.status = 'error';
+        job.error = error instanceof Error ? error.message : String(error);
+        logger.error('WORKER', `Background corpus priming failed for "${corpus.name}"`, {}, error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+
+    return {
+      name: corpus.name,
+      status: 'queued',
+      message: 'Corpus priming started in background. Call prime_corpus again in ~30 seconds.',
+      retry_after_seconds: 30,
+    };
   }
 
   async prime(corpus: CorpusFile): Promise<string> {

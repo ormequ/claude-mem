@@ -46,6 +46,16 @@ function corpusFixture(): CorpusFile {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('KnowledgeAgent OpenRouter corpus mode', () => {
   beforeEach(() => {
     process.env.CLAUDE_MEM_PROVIDER = 'openrouter';
@@ -111,5 +121,78 @@ describe('KnowledgeAgent OpenRouter corpus mode', () => {
     const sessionId = await agent.prime(corpus);
 
     expect(sessionId).toBe('openrouter-corpus-mks-smoke-test-existing');
+  });
+
+  it('queues first-time priming in the background and reports pending while it runs', async () => {
+    const response = deferred<Response>();
+    let fetchCalls = 0;
+    globalThis.fetch = mock(async () => {
+      fetchCalls++;
+      return await response.promise;
+    }) as any;
+
+    const writes: CorpusFile[] = [];
+    const corpus = corpusFixture();
+    const agent = new KnowledgeAgent({
+      write: (updated: CorpusFile) => {
+        writes.push({ ...updated });
+      },
+    } as any);
+
+    const queued = await agent.requestPrime(corpus);
+    const pending = await agent.requestPrime(corpus);
+
+    expect(queued).toEqual({
+      name: 'mks-smoke-test',
+      status: 'queued',
+      message: 'Corpus priming started in background. Call prime_corpus again in ~30 seconds.',
+      retry_after_seconds: 30,
+    });
+    expect(pending).toEqual({
+      name: 'mks-smoke-test',
+      status: 'pending',
+      message: 'Corpus priming is still running. Call prime_corpus again in ~30 seconds.',
+      retry_after_seconds: 30,
+    });
+    expect(fetchCalls).toBe(1);
+
+    response.resolve(new Response(JSON.stringify({
+      choices: [{ message: { content: 'primed' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await Bun.sleep(0);
+
+    const ready = await agent.requestPrime(corpus);
+    expect(ready.status).toBe('ready');
+    expect(ready.session_id).toStartWith('openrouter-corpus-mks-smoke-test-');
+    expect(writes.at(-1)?.session_id).toBe(ready.session_id);
+  });
+
+  it('returns a background priming error once and allows retry', async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = mock(async () => {
+      fetchCalls++;
+      return new Response('provider unavailable', { status: 503 });
+    }) as any;
+
+    const corpus = corpusFixture();
+    const agent = new KnowledgeAgent({ write: () => {} } as any);
+
+    const queued = await agent.requestPrime(corpus);
+    expect(queued.status).toBe('queued');
+
+    await Bun.sleep(0);
+
+    const failed = await agent.requestPrime(corpus);
+    expect(failed).toEqual({
+      name: 'mks-smoke-test',
+      status: 'error',
+      message: 'Corpus priming failed in background. Call prime_corpus again to retry.',
+      error: 'OpenRouter corpus query failed (503): provider unavailable',
+    });
+
+    const retry = await agent.requestPrime(corpus);
+    expect(retry.status).toBe('queued');
+    expect(fetchCalls).toBe(2);
   });
 });

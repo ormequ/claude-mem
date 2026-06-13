@@ -171,8 +171,8 @@ export class CorpusRoutes extends BaseRouteHandler {
       return;
     }
 
-    const sessionId = await this.knowledgeAgent.prime(corpus);
-    res.json({ session_id: sessionId, name: corpus.name });
+    const result = await this.knowledgeAgent.requestPrime(corpus);
+    res.json(result);
   });
 
   private handleQueryCorpus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {

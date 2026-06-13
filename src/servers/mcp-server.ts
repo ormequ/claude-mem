@@ -818,7 +818,7 @@ NEVER fetch full details without filtering first. 10x token savings.`,
   },
   {
     name: 'prime_corpus',
-    description: 'Prime a knowledge corpus — creates an AI session loaded with the corpus knowledge. Must be called before query_corpus.',
+    description: 'Prime a knowledge corpus. If already primed, returns ready with session_id. On first use, may queue background priming; call again after retry_after_seconds until ready before query_corpus.',
     inputSchema: {
       type: 'object',
       properties: {
