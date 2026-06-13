@@ -35,6 +35,11 @@ export class KnowledgeAgent {
   }
 
   async prime(corpus: CorpusFile): Promise<string> {
+    if (corpus.session_id) {
+      logger.info('WORKER', `Knowledge agent already primed for corpus "${corpus.name}"`);
+      return corpus.session_id;
+    }
+
     if (this.useOpenRouterCorpusMode()) {
       const result = await this.queryOpenRouterCorpus(corpus, [
         corpus.system_prompt,

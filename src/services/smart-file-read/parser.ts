@@ -481,13 +481,42 @@ function getQueryFile(queryKey: string): string {
 
 let cachedBinPath: string | null = null;
 
+export function ensureTreeSitterCliBinary(packageDir: string): string | null {
+  const executableName = process.platform === "win32" ? "tree-sitter.exe" : "tree-sitter";
+  const binPath = join(packageDir, executableName);
+  if (existsSync(binPath)) return binPath;
+
+  const installScript = join(packageDir, "install.js");
+  if (!existsSync(installScript)) return null;
+
+  try {
+    execFileSync(process.execPath, [installScript], {
+      cwd: packageDir,
+      encoding: "utf-8",
+      timeout: 30000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+  } catch (error) {
+    logger.debug(
+      'WORKER',
+      'tree-sitter-cli binary install failed',
+      { packageDir },
+      error instanceof Error ? error : undefined
+    );
+    return null;
+  }
+
+  return existsSync(binPath) ? binPath : null;
+}
+
 function getTreeSitterBin(): string {
   if (cachedBinPath) return cachedBinPath;
 
   try {
     const pkgPath = _require.resolve("tree-sitter-cli/package.json");
-    const binPath = join(dirname(pkgPath), "tree-sitter");
-    if (existsSync(binPath)) {
+    const binPath = ensureTreeSitterCliBinary(dirname(pkgPath));
+    if (binPath) {
       cachedBinPath = binPath;
       return binPath;
     }

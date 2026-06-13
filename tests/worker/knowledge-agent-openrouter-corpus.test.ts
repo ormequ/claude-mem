@@ -94,4 +94,22 @@ describe('KnowledgeAgent OpenRouter corpus mode', () => {
     });
     expect(writes.at(-1)?.session_id).toBe(sessionId);
   });
+
+  it('returns an existing corpus session without re-priming', async () => {
+    globalThis.fetch = mock(async () => {
+      throw new Error('prime should not call OpenRouter when session_id already exists');
+    }) as any;
+
+    const corpus = corpusFixture();
+    corpus.session_id = 'openrouter-corpus-mks-smoke-test-existing';
+    const agent = new KnowledgeAgent({
+      write: () => {
+        throw new Error('prime should not rewrite an already primed corpus');
+      },
+    } as any);
+
+    const sessionId = await agent.prime(corpus);
+
+    expect(sessionId).toBe('openrouter-corpus-mks-smoke-test-existing');
+  });
 });
