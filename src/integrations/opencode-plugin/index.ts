@@ -82,6 +82,10 @@ interface SessionCompactingInput {
   sessionID: string;
 }
 
+interface SessionCompactingOutput {
+  context?: string[];
+}
+
 interface BusEvent {
   type: string;
   properties?: {
@@ -171,9 +175,29 @@ function ensureSessionInitialized(openCodeSessionId: string, projectName: string
       contentSessionId,
       project: projectName,
       prompt: "",
+      platformSource: "opencode",
     });
   }
   return contentSessionId;
+}
+
+function recordUserPrompt(openCodeSessionId: string, projectName: string, prompt: string): string {
+  const contentSessionId = getOrCreateContentSessionId(openCodeSessionId);
+  initializedSessionIds.add(openCodeSessionId);
+  workerPostFireAndForget("/api/sessions/init", {
+    contentSessionId,
+    project: projectName,
+    prompt,
+    platformSource: "opencode",
+  });
+  return contentSessionId;
+}
+
+function extractTextParts(output: ChatMessageOutput): string {
+  return (output.parts || [])
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("\n");
 }
 
 function truncate(text: string): string {
@@ -201,31 +225,38 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
         tool_input: output.args || {},
         tool_response: truncate(output.output || ""),
         cwd: ctx.directory,
+        platformSource: "opencode",
+        tool_use_id: input.callID,
       });
     },
 
-    // Capture assistant chat messages as observations.
+    // Capture user prompts for memory alignment and assistant chat messages as
+    // observations. OpenCode exposes both via the same chat.message hook.
     "chat.message": async (
       _input: Record<string, unknown>,
       output: ChatMessageOutput,
     ): Promise<void> => {
       const sessionID = output.message?.sessionID;
       if (!sessionID) return;
+
+      const messageText = extractTextParts(output);
+      if (!messageText) return;
+
+      if (output.message?.role === "user") {
+        recordUserPrompt(sessionID, projectName, messageText);
+        return;
+      }
+
       if (output.message?.role !== "assistant") return;
 
       const contentSessionId = ensureSessionInitialized(sessionID, projectName);
-      const messageText = (output.parts || [])
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text as string)
-        .join("\n");
-      if (!messageText) return;
-
       workerPostFireAndForget("/api/sessions/observations", {
         contentSessionId,
         tool_name: "assistant_message",
         tool_input: {},
         tool_response: truncate(messageText),
         cwd: ctx.directory,
+        platformSource: "opencode",
       });
     },
 
@@ -233,11 +264,19 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
     // hook (the old `session.compacted` bus event never existed).
     "experimental.session.compacting": async (
       input: SessionCompactingInput,
+      output?: SessionCompactingOutput,
     ): Promise<void> => {
       const contentSessionId = ensureSessionInitialized(input.sessionID, projectName);
+      const contextText = await workerGetText(
+        `/api/context/inject?project=${encodeURIComponent(projectName)}`,
+      );
+      if (contextText && output?.context) {
+        output.context.push(contextText);
+      }
       workerPostFireAndForget("/api/sessions/summarize", {
         contentSessionId,
         last_assistant_message: "",
+        platformSource: "opencode",
       });
     },
 
@@ -255,6 +294,7 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
           workerPostFireAndForget("/api/sessions/summarize", {
             contentSessionId,
             last_assistant_message: "",
+            platformSource: "opencode",
           });
           break;
         }

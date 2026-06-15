@@ -117,6 +117,61 @@ describe("OpenCode plugin event contract", () => {
       const obsBody = obsPost!.body as Record<string, unknown>;
       expect(obsBody.tool_name).toBe("read");
       expect(obsBody.tool_response).toBe("file contents");
+      expect(obsBody.platformSource).toBe("opencode");
+      expect(obsBody.tool_use_id).toBe("c1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("captures user chat messages as session-init prompts with opencode platform source", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posts.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(JSON.stringify({ status: "initialized" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(pluginCtx);
+      await plugin["chat.message"](
+        {},
+        {
+          message: { role: "user", sessionID: "ses_user" },
+          parts: [{ type: "text", text: "remember this opencode prompt" }],
+        },
+      );
+
+      const initPost = posts.find((p) => p.url.includes("/api/sessions/init"));
+      expect(initPost, "user chat message should initialize the session").toBeTruthy();
+      const initBody = initPost!.body as Record<string, unknown>;
+      expect(initBody.prompt).toBe("remember this opencode prompt");
+      expect(initBody.platformSource).toBe("opencode");
+      expect(initBody.project).toBe("test-project");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("adds worker context during OpenCode compaction when available", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.includes("/api/context/inject")) {
+        return new Response("memory context from worker", { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(pluginCtx);
+      const output = { context: [] as string[] };
+      await plugin["experimental.session.compacting"]({ sessionID: "ses_compact" }, output);
+
+      expect(output.context).toContain("memory context from worker");
     } finally {
       globalThis.fetch = originalFetch;
     }
