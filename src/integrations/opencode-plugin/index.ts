@@ -63,10 +63,15 @@ interface ToolExecuteAfterInput {
 }
 
 interface ToolExecuteAfterOutput {
-  title: string;
-  output: string;
-  metadata: Record<string, unknown>;
+  title?: string;
+  output?: string;
+  metadata?: Record<string, unknown>;
   args?: Record<string, unknown>;
+  state?: {
+    input?: Record<string, unknown>;
+    output?: unknown;
+    error?: unknown;
+  };
 }
 
 interface ChatMessageOutput {
@@ -206,6 +211,25 @@ function truncate(text: string): string {
     : text;
 }
 
+function extractToolInput(output: ToolExecuteAfterOutput): Record<string, unknown> {
+  return output.args || output.state?.input || {};
+}
+
+function stringifyToolOutput(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractToolResponse(output: ToolExecuteAfterOutput): string {
+  const value = output.output ?? output.state?.output ?? output.state?.error ?? "";
+  return stringifyToolOutput(value);
+}
+
 export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
   const projectName = ctx.project?.name || "opencode";
 
@@ -222,8 +246,8 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       workerPostFireAndForget("/api/sessions/observations", {
         contentSessionId,
         tool_name: input.tool,
-        tool_input: output.args || {},
-        tool_response: truncate(output.output || ""),
+        tool_input: extractToolInput(output),
+        tool_response: truncate(extractToolResponse(output)),
         cwd: ctx.directory,
         platformSource: "opencode",
         tool_use_id: input.callID,

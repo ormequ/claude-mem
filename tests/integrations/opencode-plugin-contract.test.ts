@@ -1,4 +1,6 @@
 import { describe, it, expect } from "bun:test";
+import { join } from "path";
+import { pathToFileURL } from "url";
 import {
   ClaudeMemPlugin,
   parseSearchResponse,
@@ -50,6 +52,15 @@ const pluginCtx = {
 };
 
 describe("OpenCode plugin event contract", () => {
+  it("builds an OpenCode runtime bundle with exactly one plugin function export", async () => {
+    const bundleUrl = pathToFileURL(join(process.cwd(), "dist/opencode-plugin/index.js"));
+    const mod = await import(`${bundleUrl.href}?test=${Date.now()}`);
+    const exports = Object.keys(mod).sort();
+
+    expect(exports).toEqual(["ClaudeMemPlugin"]);
+    expect(typeof mod.ClaudeMemPlugin).toBe("function");
+  });
+
   it("only registers hooks that are part of OpenCode's real contract", async () => {
     const plugin = await ClaudeMemPlugin(pluginCtx);
     const hookKeys = Object.keys(plugin);
@@ -119,6 +130,48 @@ describe("OpenCode plugin event contract", () => {
       expect(obsBody.tool_response).toBe("file contents");
       expect(obsBody.platformSource).toBe("opencode");
       expect(obsBody.tool_use_id).toBe("c1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("posts real OpenCode tool part output from state.output", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posts.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(pluginCtx);
+      const toolAfter = plugin["tool.execute.after"];
+      await toolAfter(
+        { tool: "bash", sessionID: "ses_real", callID: "functions.bash:1" },
+        {
+          type: "tool",
+          tool: "bash",
+          callID: "functions.bash:1",
+          state: {
+            status: "completed",
+            input: { command: "pwd", description: "Print working directory" },
+            output: "/Users/example/project",
+          },
+        } as never,
+      );
+
+      const obsPost = posts.find((p) => p.url.includes("/api/sessions/observations"));
+      expect(obsPost, "tool.execute.after should POST an observation").toBeTruthy();
+      const obsBody = obsPost!.body as Record<string, unknown>;
+      expect(obsBody.tool_input).toEqual({
+        command: "pwd",
+        description: "Print working directory",
+      });
+      expect(obsBody.tool_response).toBe("/Users/example/project");
+      expect(obsBody.tool_use_id).toBe("functions.bash:1");
     } finally {
       globalThis.fetch = originalFetch;
     }
