@@ -26,6 +26,7 @@ const REAL_OPENCODE_HOOK_NAMES = new Set<string>([
   "chat.message",
   "event",
   "experimental.session.compacting",
+  "experimental.chat.system.transform",
   "tool.execute.before",
   "permission.ask",
   "auth",
@@ -87,6 +88,7 @@ describe("OpenCode plugin event contract", () => {
     // The capture-critical hooks must be present.
     expect(hookKeys).toContain("tool.execute.after");
     expect(hookKeys).toContain("chat.message");
+    expect(hookKeys).toContain("experimental.chat.system.transform");
     expect(hookKeys).toContain("experimental.session.compacting");
     expect(hookKeys).toContain("event");
   });
@@ -289,6 +291,32 @@ describe("OpenCode plugin event contract", () => {
       await plugin["experimental.session.compacting"]({ sessionID: "ses_compact_mks" }, output);
 
       expect(output.context).toContain("mks memory context");
+      expect(requestedUrls.some((url) => url.includes("project=MKS"))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes("project=opencode"))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("injects worker context into OpenCode system prompts for the shared workspace project", async () => {
+    const requestedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const path = String(url);
+      requestedUrls.push(path);
+      if (path.includes("/api/context/inject")) {
+        return new Response("mks automatic memory context", { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(mksOpenCodeCtx);
+      const output = { system: ["existing opencode system prompt"] };
+      await plugin["experimental.chat.system.transform"]({}, output);
+
+      expect(output.system).toContain("existing opencode system prompt");
+      expect(output.system.join("\n")).toContain("mks automatic memory context");
       expect(requestedUrls.some((url) => url.includes("project=MKS"))).toBe(true);
       expect(requestedUrls.some((url) => url.includes("project=opencode"))).toBe(false);
     } finally {

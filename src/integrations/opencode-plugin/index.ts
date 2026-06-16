@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from "../../shared/SettingsDefaultsManager.js
  *   - `tool.execute.after`            (input, output) — fires after every tool run
  *   - `chat.message`                  ({}, output)    — fires on each chat message
  *   - `event`                         ({ event })     — generic bus; event.type carries the name
+ *   - `experimental.chat.system.transform`             — mutates system prompt context before LLM calls
  *   - `experimental.session.compacting`               — fires when a session compacts
  *
  * The generic `event` hook delivers bus events whose discriminant is
@@ -40,6 +41,7 @@ export const REGISTERED_OPENCODE_HOOKS = [
   "tool.execute.after",
   "chat.message",
   "event",
+  "experimental.chat.system.transform",
   "experimental.session.compacting",
 ] as const;
 
@@ -92,6 +94,10 @@ interface SessionCompactingOutput {
   context?: string[];
 }
 
+interface ChatSystemTransformOutput {
+  system?: string[];
+}
+
 interface BusEvent {
   type: string;
   properties?: {
@@ -109,6 +115,7 @@ function resolveWorkerPort(): string {
 const WORKER_BASE_URL = `http://127.0.0.1:${resolveWorkerPort()}`;
 const MAX_TOOL_RESPONSE_LENGTH = 1000;
 const HARNESS_PROJECT_NAMES = new Set(["opencode", "global"]);
+const MEMORY_CONTEXT_MARKER = "<claude-mem-context>";
 
 const JSON_HEADERS: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -243,6 +250,21 @@ function resolveProjectName(ctx: OpenCodePluginContext): string {
   return basename || configuredName || "opencode";
 }
 
+async function fetchWorkerContext(projectName: string): Promise<string | null> {
+  const contextText = await workerGetText(
+    `/api/context/inject?project=${encodeURIComponent(projectName)}`,
+  );
+  if (!contextText?.trim()) return null;
+  if (contextText.includes("*No context yet.")) return null;
+  return contextText.trim();
+}
+
+async function fetchInjectableContext(projectName: string): Promise<string | null> {
+  const contextText = await fetchWorkerContext(projectName);
+  if (!contextText) return null;
+  return `${MEMORY_CONTEXT_MARKER}\n${contextText}\n</claude-mem-context>`;
+}
+
 export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
   const projectName = resolveProjectName(ctx);
 
@@ -297,6 +319,24 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       });
     },
 
+    // Inject memory before each model call. OpenCode's chat.message hook only
+    // observes messages after they exist; system.transform mutates LLM context.
+    "experimental.chat.system.transform": async (
+      _input: Record<string, never>,
+      output: ChatSystemTransformOutput,
+    ): Promise<void> => {
+      if (!output?.system) return;
+      if (output.system.some((entry) => entry.includes(MEMORY_CONTEXT_MARKER))) return;
+
+      const contextText = await fetchInjectableContext(projectName);
+      if (!contextText) return;
+
+      output.system.push(contextText);
+      console.log(
+        `[claude-mem] Injected memory context (project: ${projectName}, chars: ${contextText.length})`,
+      );
+    },
+
     // Summarize when a session compacts. This is OpenCode's real compaction
     // hook (the old `session.compacted` bus event never existed).
     "experimental.session.compacting": async (
@@ -304,9 +344,7 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       output?: SessionCompactingOutput,
     ): Promise<void> => {
       const contentSessionId = ensureSessionInitialized(input.sessionID, projectName);
-      const contextText = await workerGetText(
-        `/api/context/inject?project=${encodeURIComponent(projectName)}`,
-      );
+      const contextText = await fetchWorkerContext(projectName);
       if (contextText && output?.context) {
         output.context.push(contextText);
       }

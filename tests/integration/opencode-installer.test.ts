@@ -7,6 +7,7 @@ import {
   deregisterOpenCodePluginFromConfig,
   getOpenCodeAgentsMdPath,
   getOpenCodeConfigPath,
+  getInstalledSkillsPath,
   installOpenCodeIntegration,
   removeOpenCodePluginReference,
   registerOpenCodePluginInConfig,
@@ -123,6 +124,8 @@ describe('OpenCode installer config registration', () => {
       expect(agentsContent).toContain('workspace project');
       expect(agentsContent).toContain('claude-mem search');
       expect(agentsContent).not.toContain('No context yet');
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'learn-codebase', 'SKILL.md'))).toBe(true);
       expect(requestedUrls.some((url) => url.includes('project=opencode'))).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;

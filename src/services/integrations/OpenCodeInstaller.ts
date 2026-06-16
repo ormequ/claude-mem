@@ -2,7 +2,7 @@
 import path from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, cpSync, rmSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
 
@@ -23,6 +23,14 @@ export function getOpenCodeConfigDirectory(): string {
 
 export function getOpenCodePluginsDirectory(): string {
   return path.join(getOpenCodeConfigDirectory(), 'plugins');
+}
+
+export function getOpenCodeSkillsDirectory(): string {
+  return path.join(getOpenCodeConfigDirectory(), 'skills');
+}
+
+export function getInstalledSkillsPath(): string {
+  return path.join(getOpenCodeSkillsDirectory(), 'claude-mem');
 }
 
 export function getOpenCodeConfigPath(): string {
@@ -128,6 +136,54 @@ export function findBuiltPluginPath(): string | null {
   }
 
   return null;
+}
+
+export function findBundledSkillsPath(): string | null {
+  const possiblePaths = [
+    path.join(
+      process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), '.claude'),
+      'plugins', 'marketplaces', 'ormequ',
+      'plugin', 'skills',
+    ),
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'plugin', 'skills'),
+  ];
+
+  for (const candidatePath of possiblePaths) {
+    if (existsSync(path.join(candidatePath, 'mem-search', 'SKILL.md'))) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+}
+
+export function installOpenCodeSkills(): number {
+  const skillsSourcePath = findBundledSkillsPath();
+  if (!skillsSourcePath) {
+    console.error('Could not find bundled claude-mem skills.');
+    console.error('  Expected at: plugin/skills');
+    return 1;
+  }
+
+  const destinationPath = getInstalledSkillsPath();
+
+  try {
+    mkdirSync(getOpenCodeSkillsDirectory(), { recursive: true });
+    rmSync(destinationPath, { recursive: true, force: true });
+    cpSync(skillsSourcePath, destinationPath, { recursive: true });
+
+    console.log(`  Skills installed to: ${destinationPath}`);
+    logger.info('OPENCODE', 'Skills installed', {
+      source: skillsSourcePath,
+      destination: destinationPath,
+    });
+
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to install OpenCode skills: ${message}`);
+    return 1;
+  }
 }
 
 export function installOpenCodePlugin(): number {
@@ -239,6 +295,18 @@ export function uninstallOpenCodePlugin(): number {
     hasErrors = true;
   }
 
+  const skillsPath = getInstalledSkillsPath();
+  if (existsSync(skillsPath)) {
+    try {
+      rmSync(skillsPath, { recursive: true, force: true });
+      console.log(`  Removed skills: ${skillsPath}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`  Failed to remove skills: ${message}`);
+      hasErrors = true;
+    }
+  }
+
   const agentsMdPath = getOpenCodeAgentsMdPath();
   if (existsSync(agentsMdPath)) {
     let content: string;
@@ -279,6 +347,7 @@ export function checkOpenCodeStatus(): number {
 
   const configDirectory = getOpenCodeConfigDirectory();
   const pluginPath = getInstalledPluginPath();
+  const skillsPath = getInstalledSkillsPath();
   const agentsMdPath = getOpenCodeAgentsMdPath();
 
   console.log(`Config directory: ${configDirectory}`);
@@ -287,6 +356,10 @@ export function checkOpenCodeStatus(): number {
 
   console.log(`Plugin: ${pluginPath}`);
   console.log(`  Installed: ${existsSync(pluginPath) ? 'yes' : 'no'}`);
+  console.log('');
+
+  console.log(`Skills: ${skillsPath}`);
+  console.log(`  Installed: ${existsSync(path.join(skillsPath, 'mem-search', 'SKILL.md')) ? 'yes' : 'no'}`);
   console.log('');
 
   console.log(`Context (AGENTS.md): ${agentsMdPath}`);
@@ -311,6 +384,11 @@ export async function installOpenCodeIntegration(): Promise<number> {
     return pluginResult;
   }
 
+  const skillsResult = installOpenCodeSkills();
+  if (skillsResult !== 0) {
+    return skillsResult;
+  }
+
   const contextToInject = `# Claude-Mem Runtime Memory
 
 Claude-Mem memory is shared by workspace project name across Claude Code and OpenCode.
@@ -328,6 +406,7 @@ Do not infer that memory is empty from this file; project-specific memory is ser
 Installation complete!
 
 Plugin installed to: ${getInstalledPluginPath()}
+Skills installed to: ${getInstalledSkillsPath()}
 Context file: ${getOpenCodeAgentsMdPath()}
 
 Next steps:
