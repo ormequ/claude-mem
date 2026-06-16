@@ -16,12 +16,18 @@ import {
 describe('OpenCode installer config registration', () => {
   let tempDir: string;
   let previousConfigDir: string | undefined;
+  let previousClaudeConfigDir: string | undefined;
+  let previousInstallAllSkills: string | undefined;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `opencode-installer-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(tempDir, { recursive: true });
     previousConfigDir = process.env.OPENCODE_CONFIG_DIR;
+    previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    previousInstallAllSkills = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
     process.env.OPENCODE_CONFIG_DIR = tempDir;
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'claude');
+    delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
   });
 
   afterEach(() => {
@@ -29,6 +35,16 @@ describe('OpenCode installer config registration', () => {
       delete process.env.OPENCODE_CONFIG_DIR;
     } else {
       process.env.OPENCODE_CONFIG_DIR = previousConfigDir;
+    }
+    if (previousClaudeConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    }
+    if (previousInstallAllSkills === undefined) {
+      delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    } else {
+      process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = previousInstallAllSkills;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -126,7 +142,31 @@ describe('OpenCode installer config registration', () => {
       expect(agentsContent).not.toContain('No context yet');
       expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
       expect(existsSync(join(getInstalledSkillsPath(), 'learn-codebase', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'smart-explore', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'pathfinder', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'standup', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'wowerpoint', 'SKILL.md'))).toBe(false);
+      expect(existsSync(join(getInstalledSkillsPath(), 'version-bump', 'SKILL.md'))).toBe(false);
       expect(requestedUrls.some((url) => url.includes('project=opencode'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('installs every bundled skill when CLAUDE_MEM_INSTALL_ALL_SKILLS=true', async () => {
+    process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = 'true';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'wowerpoint', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'version-bump', 'SKILL.md'))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }

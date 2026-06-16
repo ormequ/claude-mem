@@ -30,6 +30,10 @@ import {
   type InstallSummary,
 } from '../install/error-reporter.js';
 import { extractEresolveBlock, isEresolve, runNpmStrict } from '../install/npm-install-helper.js';
+import {
+  filterClaudeMemSkillsDirectory,
+  shouldInstallAllClaudeMemSkills,
+} from '../../services/integrations/SkillSelection.js';
 
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
   return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH)[key];
@@ -669,6 +673,14 @@ function copyPluginToMarketplace(): void {
       force: true,
     });
   }
+
+  const skillsDirectory = join(marketplaceDir, 'plugin', 'skills');
+  const result = filterClaudeMemSkillsDirectory(skillsDirectory);
+  if (result.filtered && result.removed.length > 0) {
+    log.info(`Keeping ${result.kept.length} default skills (${result.removed.length} extras disabled; set CLAUDE_MEM_INSTALL_ALL_SKILLS=true to keep all).`);
+  } else if (shouldInstallAllClaudeMemSkills()) {
+    log.info('Keeping all bundled skills (CLAUDE_MEM_INSTALL_ALL_SKILLS=true).');
+  }
 }
 
 function copyPluginToCache(version: string): void {
@@ -1289,8 +1301,8 @@ async function submitOnlineSignup(payload: { email: string; note: string; versio
 }
 
 /**
- * Final step of the install flow: tell the user telemetry is on by default
- * (opt-out) and let them decide. Asked ONCE — a telemetry.json with a recorded
+ * Final step of the install flow: tell the user telemetry is off by default
+ * and let them opt in. Asked ONCE — a telemetry.json with a recorded
  * enabled decision means the user already chose, and we never re-nag. An
  * installId-only config (written by the worker's ID bootstrap) does NOT count
  * as a decision. Respects DO_NOT_TRACK (skip entirely: they already answered),
@@ -1306,11 +1318,11 @@ async function promptTelemetryOptIn(): Promise<void> {
 
   p.log.message(pc.dim(
     'Anonymous install ID only — no prompts, file paths, code, or project names, ever.\n'
-    + 'Details: https://docs.claude-mem.ai/telemetry · Change anytime: claude-mem telemetry disable',
+    + 'Telemetry is off by default in this fork. Details: https://docs.claude-mem.ai/telemetry',
   ));
   const consent = await p.confirm({
-    message: 'Share anonymized usage data with CMEM? It is on by default and helps us make the product better.',
-    initialValue: true,
+    message: 'Share anonymized usage data with CMEM?',
+    initialValue: false,
   });
   if (p.isCancel(consent)) return;
 

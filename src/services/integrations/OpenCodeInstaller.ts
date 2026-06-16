@@ -5,6 +5,10 @@ import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, cpSync, rmSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
+import {
+  DEFAULT_CLAUDE_MEM_SKILLS,
+  shouldInstallAllClaudeMemSkills,
+} from './SkillSelection.js';
 
 const OPENCODE_PLUGIN_CONFIG_PATH = './plugins/claude-mem.js';
 
@@ -157,6 +161,31 @@ export function findBundledSkillsPath(): string | null {
   return null;
 }
 
+function installSelectedOpenCodeSkills(sourcePath: string, destinationPath: string): number {
+  let installedCount = 0;
+  const skillNames = shouldInstallAllClaudeMemSkills()
+    ? null
+    : [...DEFAULT_CLAUDE_MEM_SKILLS];
+
+  if (skillNames === null) {
+    cpSync(sourcePath, destinationPath, { recursive: true });
+    return -1;
+  }
+
+  for (const skillName of skillNames) {
+    const sourceSkillPath = path.join(sourcePath, skillName);
+    if (!existsSync(path.join(sourceSkillPath, 'SKILL.md'))) {
+      logger.warn('OPENCODE', 'Default OpenCode skill missing from bundle', { skillName });
+      continue;
+    }
+
+    cpSync(sourceSkillPath, path.join(destinationPath, skillName), { recursive: true });
+    installedCount += 1;
+  }
+
+  return installedCount;
+}
+
 export function installOpenCodeSkills(): number {
   const skillsSourcePath = findBundledSkillsPath();
   if (!skillsSourcePath) {
@@ -170,12 +199,15 @@ export function installOpenCodeSkills(): number {
   try {
     mkdirSync(getOpenCodeSkillsDirectory(), { recursive: true });
     rmSync(destinationPath, { recursive: true, force: true });
-    cpSync(skillsSourcePath, destinationPath, { recursive: true });
+    mkdirSync(destinationPath, { recursive: true });
+    const installedCount = installSelectedOpenCodeSkills(skillsSourcePath, destinationPath);
 
-    console.log(`  Skills installed to: ${destinationPath}`);
+    const mode = shouldInstallAllClaudeMemSkills() ? 'all bundled skills' : `${installedCount} default skills`;
+    console.log(`  Skills installed to: ${destinationPath} (${mode})`);
     logger.info('OPENCODE', 'Skills installed', {
       source: skillsSourcePath,
       destination: destinationPath,
+      mode,
     });
 
     return 0;
