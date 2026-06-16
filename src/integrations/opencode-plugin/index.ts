@@ -1,4 +1,5 @@
 import { z } from "zod";
+import path from "path";
 import { SettingsDefaultsManager } from "../../shared/SettingsDefaultsManager.js";
 
 /**
@@ -107,6 +108,7 @@ function resolveWorkerPort(): string {
 
 const WORKER_BASE_URL = `http://127.0.0.1:${resolveWorkerPort()}`;
 const MAX_TOOL_RESPONSE_LENGTH = 1000;
+const HARNESS_PROJECT_NAMES = new Set(["opencode", "global"]);
 
 const JSON_HEADERS: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -230,8 +232,19 @@ function extractToolResponse(output: ToolExecuteAfterOutput): string {
   return stringifyToolOutput(value);
 }
 
+function resolveProjectName(ctx: OpenCodePluginContext): string {
+  const configuredName = ctx.project?.name?.trim();
+  if (configuredName && !HARNESS_PROJECT_NAMES.has(configuredName.toLowerCase())) {
+    return configuredName;
+  }
+
+  const workspacePath = ctx.directory || ctx.project?.path || ctx.worktree || "";
+  const basename = path.basename(workspacePath);
+  return basename || configuredName || "opencode";
+}
+
 export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
-  const projectName = ctx.project?.name || "opencode";
+  const projectName = resolveProjectName(ctx);
 
   console.log(`[claude-mem] OpenCode plugin loading (project: ${projectName})`);
 
@@ -347,7 +360,7 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
           }
 
           const text = await workerGetText(
-            `/api/search/observations?query=${encodeURIComponent(query)}&limit=10`,
+            `/api/search/observations?query=${encodeURIComponent(query)}&limit=10&project=${encodeURIComponent(projectName)}`,
           );
 
           if (!text) {

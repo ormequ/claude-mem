@@ -5,7 +5,9 @@ import { tmpdir } from 'os';
 import {
   addOpenCodePluginReference,
   deregisterOpenCodePluginFromConfig,
+  getOpenCodeAgentsMdPath,
   getOpenCodeConfigPath,
+  installOpenCodeIntegration,
   removeOpenCodePluginReference,
   registerOpenCodePluginInConfig,
 } from '../../src/services/integrations/OpenCodeInstaller.js';
@@ -103,5 +105,27 @@ describe('OpenCode installer config registration', () => {
     expect(result).toBe(0);
     const config = JSON.parse(readFileSync(getOpenCodeConfigPath(), 'utf-8'));
     expect(config.plugin).toEqual(['context-mode']);
+  });
+
+  it('installs a neutral AGENTS.md primer instead of an opencode-project placeholder', async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requestedUrls.push(String(url));
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      const agentsContent = readFileSync(getOpenCodeAgentsMdPath(), 'utf-8');
+      expect(agentsContent).toContain('workspace project');
+      expect(agentsContent).toContain('claude-mem search');
+      expect(agentsContent).not.toContain('No context yet');
+      expect(requestedUrls.some((url) => url.includes('project=opencode'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

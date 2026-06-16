@@ -5,7 +5,6 @@ import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
-import { getWorkerPort } from '../../shared/worker-utils.js';
 
 const OPENCODE_PLUGIN_CONFIG_PATH = './plugins/claude-mem.js';
 
@@ -193,20 +192,6 @@ export async function syncContextToAgentsMd(
   }
 }
 
-async function fetchRealContextFromWorker(): Promise<string | null> {
-  const workerPort = getWorkerPort();
-  const healthResponse = await fetch(`http://127.0.0.1:${workerPort}/api/readiness`);
-  if (!healthResponse.ok) return null;
-
-  const contextResponse = await fetch(
-    `http://127.0.0.1:${workerPort}/api/context/inject?project=opencode`,
-  );
-  if (!contextResponse.ok) return null;
-
-  const realContext = await contextResponse.text();
-  return realContext && realContext.trim() ? realContext : null;
-}
-
 async function fetchAndInjectOpenCodeContext(port: number, project: string): Promise<void> {
   const response = await fetch(
     `http://127.0.0.1:${port}/api/context/inject?project=${encodeURIComponent(project)}`,
@@ -326,37 +311,17 @@ export async function installOpenCodeIntegration(): Promise<number> {
     return pluginResult;
   }
 
-  const placeholderContext = `# Memory Context from Past Sessions
+  const contextToInject = `# Claude-Mem Runtime Memory
 
-*No context yet. Complete your first session and context will appear here.*
-
-Use claude-mem search tools for manual memory queries.`;
-
-  let contextToInject = placeholderContext;
-  let contextSource = 'placeholder';
-  try {
-    const realContext = await fetchRealContextFromWorker();
-    if (realContext) {
-      contextToInject = realContext;
-      contextSource = 'existing memory';
-    }
-  } catch (error) {
-    if (error instanceof Error) {
-      logger.debug('WORKER', 'Worker not available during OpenCode install', {}, error);
-    } else {
-      logger.debug('WORKER', 'Worker not available during OpenCode install', {}, new Error(String(error)));
-    }
-  }
+Claude-Mem memory is shared by workspace project name across Claude Code and OpenCode.
+Use claude-mem search tools to retrieve relevant past sessions for the current workspace project.
+Do not infer that memory is empty from this file; project-specific memory is served by the OpenCode plugin at runtime.`;
 
   const injectResult = injectContextIntoAgentsMd(contextToInject);
   if (injectResult !== 0) {
-    logger.warn('OPENCODE', `Failed to inject ${contextSource} context into AGENTS.md during install`);
+    logger.warn('OPENCODE', 'Failed to inject runtime memory primer into AGENTS.md during install');
   } else {
-    if (contextSource === 'existing memory') {
-      console.log('  Context injected from existing memory');
-    } else {
-      console.log('  Placeholder context created (worker not running)');
-    }
+    console.log('  Runtime memory primer created');
   }
 
   console.log(`

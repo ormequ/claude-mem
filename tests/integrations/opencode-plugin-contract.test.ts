@@ -51,6 +51,13 @@ const pluginCtx = {
   $: {},
 };
 
+const mksOpenCodeCtx = {
+  ...pluginCtx,
+  project: { name: "opencode", path: "/Users/belokobylskiiilia/Development/MKS" },
+  directory: "/Users/belokobylskiiilia/Development/MKS",
+  worktree: "opencode",
+};
+
 describe("OpenCode plugin event contract", () => {
   it("builds an OpenCode runtime bundle with exactly one plugin function export", async () => {
     const bundleUrl = pathToFileURL(join(process.cwd(), "dist/opencode-plugin/index.js"));
@@ -209,10 +216,43 @@ describe("OpenCode plugin event contract", () => {
     }
   });
 
+  it("uses the workspace basename instead of OpenCode's harness project name", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posts.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return new Response(JSON.stringify({ status: "initialized" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(mksOpenCodeCtx);
+      await plugin["chat.message"](
+        {},
+        {
+          message: { role: "user", sessionID: "ses_mks" },
+          parts: [{ type: "text", text: "shared memory should use MKS" }],
+        },
+      );
+
+      const initPost = posts.find((p) => p.url.includes("/api/sessions/init"));
+      expect(initPost, "user chat message should initialize the session").toBeTruthy();
+      const initBody = initPost!.body as Record<string, unknown>;
+      expect(initBody.project).toBe("MKS");
+      expect(initBody.platformSource).toBe("opencode");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("adds worker context during OpenCode compaction when available", async () => {
+    const requestedUrls: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const path = String(url);
+      requestedUrls.push(path);
       if (path.includes("/api/context/inject")) {
         return new Response("memory context from worker", { status: 200 });
       }
@@ -225,6 +265,55 @@ describe("OpenCode plugin event contract", () => {
       await plugin["experimental.session.compacting"]({ sessionID: "ses_compact" }, output);
 
       expect(output.context).toContain("memory context from worker");
+      expect(requestedUrls.some((url) => url.includes("project=test-project"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("adds worker context for the shared workspace project during OpenCode compaction", async () => {
+    const requestedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      requestedUrls.push(path);
+      if (path.includes("/api/context/inject")) {
+        return new Response("mks memory context", { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(mksOpenCodeCtx);
+      const output = { context: [] as string[] };
+      await plugin["experimental.session.compacting"]({ sessionID: "ses_compact_mks" }, output);
+
+      expect(output.context).toContain("mks memory context");
+      expect(requestedUrls.some((url) => url.includes("project=MKS"))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes("project=opencode"))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("searches memory within the shared workspace project", async () => {
+    const requestedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const path = String(url);
+      requestedUrls.push(path);
+      return new Response(JSON.stringify({
+        content: [{ type: "text", text: 'Found 1 observation(s) matching "grpcutil"\n\nMKS grpcutil result' }],
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(mksOpenCodeCtx);
+      const result = await plugin.tool.claude_mem_search.execute({ query: "grpcutil" });
+
+      expect(result).toContain("MKS grpcutil result");
+      expect(requestedUrls.some((url) => url.includes("project=MKS"))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes("project=opencode"))).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }
