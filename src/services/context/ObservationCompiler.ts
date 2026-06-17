@@ -259,10 +259,12 @@ export function prepareSummariesForTimeline(
   displaySummaries: SessionSummary[],
   allSummaries: SessionSummary[]
 ): SummaryTimelineItem[] {
-  const mostRecentSummaryId = allSummaries[0]?.id;
+  const dedupedAllSummaries = dedupeSummariesForTimeline(allSummaries);
+  const displayIds = new Set(dedupeSummariesForTimeline(displaySummaries).map(summary => summary.id));
+  const mostRecentSummaryId = dedupedAllSummaries[0]?.id;
 
-  return displaySummaries.map((summary, i) => {
-    const olderSummary = i === 0 ? null : allSummaries[i + 1];
+  return dedupedAllSummaries.filter(summary => displayIds.has(summary.id)).map((summary, i) => {
+    const olderSummary = i === 0 ? null : dedupedAllSummaries[i + 1];
     return {
       ...summary,
       displayEpoch: olderSummary ? olderSummary.created_at_epoch : summary.created_at_epoch,
@@ -270,6 +272,35 @@ export function prepareSummariesForTimeline(
       shouldShowLink: summary.id !== mostRecentSummaryId
     };
   });
+}
+
+function hasSummaryContent(summary: SessionSummary): boolean {
+  return Boolean(
+    summary.investigated?.trim() ||
+    summary.learned?.trim() ||
+    summary.completed?.trim() ||
+    summary.next_steps?.trim()
+  );
+}
+
+function dedupeSummariesForTimeline(summaries: SessionSummary[]): SessionSummary[] {
+  const seenMemorySessions = new Set<string>();
+  const deduped: SessionSummary[] = [];
+
+  for (const summary of summaries) {
+    if (!hasSummaryContent(summary)) {
+      continue;
+    }
+
+    if (seenMemorySessions.has(summary.memory_session_id)) {
+      continue;
+    }
+
+    seenMemorySessions.add(summary.memory_session_id);
+    deduped.push(summary);
+  }
+
+  return deduped;
 }
 
 export function buildTimeline(
