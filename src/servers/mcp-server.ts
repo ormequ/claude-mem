@@ -15,6 +15,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { getWorkerPort, workerHttpRequest, resolveWorkerScriptPath } from '../shared/worker-utils.js';
+import { HOOK_TIMEOUTS, getTimeout } from '../shared/hook-constants.js';
 import { ensureWorkerStarted } from '../services/worker-spawner.js';
 import { searchCodebase, formatSearchResults } from '../services/smart-file-read/search.js';
 import { parseFile, formatFoldedView, unfoldSymbol, findProjectRoot } from '../services/smart-file-read/parser.js';
@@ -113,14 +114,26 @@ async function callWorkerAPI(
   }
 }
 
+// query_corpus runs a synchronous LLM pass over the corpus server-side and
+// routinely exceeds the 30s default API timeout (#2822). Allow 5 min, overridable
+// via CLAUDE_MEM_CORPUS_QUERY_TIMEOUT_MS, bounded to a sane range.
+function getCorpusQueryTimeoutMs(): number {
+  const raw = process.env.CLAUDE_MEM_CORPUS_QUERY_TIMEOUT_MS;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed >= 1000 && parsed <= 600000) return parsed;
+  return getTimeout(HOOK_TIMEOUTS.CORPUS_QUERY);
+}
+
 async function executeWorkerPostRequest(
   endpoint: string,
-  body: Record<string, any>
+  body: Record<string, any>,
+  timeoutMs?: number
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const response = await workerHttpRequest(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    timeoutMs
   });
 
   if (!response.ok) {
@@ -142,12 +155,13 @@ async function executeWorkerPostRequest(
 
 async function callWorkerAPIPost(
   endpoint: string,
-  body: Record<string, any>
+  body: Record<string, any>,
+  timeoutMs?: number
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
   logger.debug('HTTP', 'Worker API request (POST)', undefined, { endpoint });
 
   try {
-    return await executeWorkerPostRequest(endpoint, body);
+    return await executeWorkerPostRequest(endpoint, body, timeoutMs);
   } catch (error: unknown) {
     logger.error('HTTP', 'Worker API error (POST)', { endpoint }, error instanceof Error ? error : new Error(String(error)));
     return {
@@ -853,7 +867,7 @@ NEVER fetch full details without filtering first. 10x token savings.`,
     handler: async (args: any) => {
       const { name, ...rest } = args;
       if (typeof name !== 'string' || name.trim() === '') throw new Error('Missing required argument: name');
-      return await callWorkerAPIPost(`/api/corpus/${encodeURIComponent(name)}/query`, rest);
+      return await callWorkerAPIPost(`/api/corpus/${encodeURIComponent(name)}/query`, rest, getCorpusQueryTimeoutMs());
     }
   },
   {

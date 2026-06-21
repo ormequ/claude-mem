@@ -2,6 +2,7 @@ export const HOOK_TIMEOUTS = {
   DEFAULT: 300000,            // Standard HTTP timeout (5 min for slow systems)
   HEALTH_CHECK: 3000,         // Worker health check (3s — healthy worker responds in <100ms)
   API_REQUEST: 30000,         // Hook API calls should outlive health probes but stay below hook caps
+  CORPUS_QUERY: 300000,       // query_corpus runs a synchronous LLM pass over the corpus — allow 5 min
   HOOK_READINESS_WAIT: 10000, // Per-hook wait for an already-starting worker to finish DB/search init
   POST_SPAWN_WAIT: 15000,     // Wait for daemon to start after spawn (starts in <1s on Linux, 6-8s on macOS with Chroma)
   READINESS_WAIT: 30000,      // Wait for DB + search init after spawn (typically <5s)
