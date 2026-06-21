@@ -8,7 +8,7 @@ import { USER_SETTINGS_PATH, OBSERVER_SESSIONS_DIR, ensureDir } from '../../../s
 import { buildIsolatedEnvWithFreshOAuth, getCredential } from '../../../shared/EnvManager.js';
 import { findClaudeExecutable } from '../../../shared/find-claude-executable.js';
 import { sanitizeEnv } from '../../../supervisor/env-sanitizer.js';
-import { resolveTierAlias } from '../model-aliases.js';
+import { resolveTierAlias, resolveOpenRouterQaModel } from '../model-aliases.js';
 import { resolveOpenRouterChatCompletionsUrl } from '../../../shared/openrouter-base-url.js';
 
 import { buildHardenedSdkOptions } from '../../../sdk/hardened-options.js';
@@ -295,7 +295,9 @@ export class KnowledgeAgent {
       throw new Error('OpenRouter API key not configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
     }
 
-    const model = settings.CLAUDE_MEM_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
+    // Q&A uses its own (typically stronger) model than bulk generation — see
+    // resolveOpenRouterQaModel. Falls back to CLAUDE_MEM_OPENROUTER_MODEL.
+    const model = resolveOpenRouterQaModel(settings);
     const apiUrl = resolveOpenRouterChatCompletionsUrl(settings.CLAUDE_MEM_OPENROUTER_BASE_URL || process.env.OPENROUTER_BASE_URL || '');
     const renderedCorpus = this.renderer.renderCorpus(corpus);
 

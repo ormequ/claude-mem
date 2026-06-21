@@ -102,7 +102,29 @@ describe('KnowledgeAgent OpenRouter corpus mode', () => {
       role: 'user',
       content: 'Что внутри корпуса?',
     });
+    // Backwards compatible: with no QA model set, Q&A uses the bulk model.
+    expect(requests[1].body.model).toBe('minimax-m2.7');
     expect(writes.at(-1)?.session_id).toBe(sessionId);
+  });
+
+  it('uses CLAUDE_MEM_OPENROUTER_QA_MODEL for corpus answers when set, not the bulk model', async () => {
+    process.env.CLAUDE_MEM_OPENROUTER_QA_MODEL = 'anthropic/claude-sonnet-4';
+
+    const requests: Array<{ body: any }> = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'answer' } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as any;
+
+    const corpus = corpusFixture();
+    corpus.session_id = 'openrouter-corpus-mks-smoke-test-existing';
+    const agent = new KnowledgeAgent({ read: () => corpus, write: () => {} } as any);
+
+    await agent.query(corpus, 'Question?');
+
+    expect(requests.at(-1)?.body.model).toBe('anthropic/claude-sonnet-4');
   });
 
   it('returns an existing corpus session without re-priming', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { resolveTierAlias } from '../../src/services/worker/model-aliases.js';
+import { resolveTierAlias, resolveOpenRouterQaModel } from '../../src/services/worker/model-aliases.js';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../src/shared/SettingsDefaultsManager.js';
 
 /**
@@ -53,5 +53,42 @@ describe('resolveTierAlias (#2289)', () => {
     const settings = settingsWith({ CLAUDE_MEM_TIER_FAST_MODEL: '', CLAUDE_MEM_TIER_SMART_MODEL: '' });
     expect(resolveTierAlias('$TIER:fast', settings)).toBe('haiku');
     expect(resolveTierAlias('$TIER:smart', settings)).toBe('sonnet');
+  });
+});
+
+// Knowledge-agent Q&A should be able to use a stronger model than bulk
+// generation/summary on the OpenRouter path, while staying backwards compatible.
+describe('resolveOpenRouterQaModel', () => {
+  it('falls back to the bulk OpenRouter model when QA model is unset', () => {
+    const settings = settingsWith({
+      CLAUDE_MEM_OPENROUTER_QA_MODEL: '',
+      CLAUDE_MEM_OPENROUTER_MODEL: 'xiaomi/mimo-v2-flash:free',
+    });
+    expect(resolveOpenRouterQaModel(settings)).toBe('xiaomi/mimo-v2-flash:free');
+  });
+
+  it('treats a whitespace-only QA model as unset', () => {
+    const settings = settingsWith({
+      CLAUDE_MEM_OPENROUTER_QA_MODEL: '   ',
+      CLAUDE_MEM_OPENROUTER_MODEL: 'deepseek/deepseek-chat',
+    });
+    expect(resolveOpenRouterQaModel(settings)).toBe('deepseek/deepseek-chat');
+  });
+
+  it('uses a concrete QA model when set', () => {
+    const settings = settingsWith({
+      CLAUDE_MEM_OPENROUTER_QA_MODEL: 'anthropic/claude-sonnet-4',
+      CLAUDE_MEM_OPENROUTER_MODEL: 'xiaomi/mimo-v2-flash:free',
+    });
+    expect(resolveOpenRouterQaModel(settings)).toBe('anthropic/claude-sonnet-4');
+  });
+
+  it('resolves a $TIER:smart QA model via the tier table', () => {
+    const settings = settingsWith({
+      CLAUDE_MEM_OPENROUTER_QA_MODEL: '$TIER:smart',
+      CLAUDE_MEM_TIER_SMART_MODEL: 'anthropic/claude-sonnet-4',
+      CLAUDE_MEM_OPENROUTER_MODEL: 'xiaomi/mimo-v2-flash:free',
+    });
+    expect(resolveOpenRouterQaModel(settings)).toBe('anthropic/claude-sonnet-4');
   });
 });

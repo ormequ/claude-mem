@@ -32,3 +32,22 @@ export function resolveTierAlias(model: string, settings: SettingsDefaults): str
       return model;
   }
 }
+
+/**
+ * Resolve the OpenRouter model used for knowledge-agent Q&A (corpus queries).
+ *
+ * Lets corpus answers use a stronger model than bulk observation/summary
+ * generation (which uses CLAUDE_MEM_OPENROUTER_MODEL) — a more capable model
+ * means fewer hallucinations in answers. Mirrors the Claude path, which already
+ * resolves $TIER aliases from CLAUDE_MEM_MODEL.
+ *
+ * - Concrete id (e.g. `anthropic/claude-sonnet-4`) → used as-is.
+ * - `$TIER:smart` (or any $TIER alias) → resolved via the tier table.
+ * - Empty/whitespace → falls back to CLAUDE_MEM_OPENROUTER_MODEL (unchanged
+ *   behavior), then to the free-tier default.
+ */
+export function resolveOpenRouterQaModel(settings: SettingsDefaults): string {
+  const raw = (settings.CLAUDE_MEM_OPENROUTER_QA_MODEL || '').trim();
+  const resolved = raw ? resolveTierAlias(raw, settings) : '';
+  return resolved || settings.CLAUDE_MEM_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
+}

@@ -49,6 +49,11 @@ This fork keeps local claude-mem fixes in source control instead of patching
   the same project memory as Claude Code for the same workspace.
 - `prime_corpus` cold-start behavior returns a queued/try-again-later response
   instead of failing the tool call on a worker timeout.
+- Knowledge-agent Q&A (corpus query) can use a stronger model than bulk
+  generation on the OpenRouter path: `CLAUDE_MEM_OPENROUTER_QA_MODEL` (concrete id
+  or a `$TIER:smart` alias) is used for answers, falling back to
+  `CLAUDE_MEM_OPENROUTER_MODEL` when unset. Keeps bulk observation/summary on the
+  cheap model while corpus answers use a stronger one (fewer hallucinations).
 - Smart file tools support Vue/Svelte single-file components: the `<script>`
   body is parsed under its own grammar (TS/JS) with the surrounding markup
   blanked out so line numbers stay aligned. No SFC grammar needed.
