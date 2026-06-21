@@ -83,4 +83,24 @@ describe('search merged_into_project (adopt) scoping', () => {
     const titles = results.map(r => r.title);
     expect(titles).toEqual(['Worktree finding']);
   });
+
+  // Semantic (Chroma) search returns matching IDs, then hydrates them from
+  // SQLite via getObservationsByIds with the same project scope. That hydration
+  // re-applied a raw `project = ?` filter, dropping adopted worktree rows the
+  // vector search had legitimately matched — so semantic (text-query) search
+  // missed adopted rows even though the FTS/no-query path was fixed.
+  function obsId(title: string): number {
+    const row = store.db.query('SELECT id FROM observations WHERE title = ?').get(title) as { id: number };
+    return row.id;
+  }
+
+  it('getObservationsByIds hydrates adopted worktree rows under the parent project', () => {
+    const rows = store.getObservationsByIds([obsId('Worktree finding')], { project: 'kedo' });
+    expect(rows.map(r => r.title)).toEqual(['Worktree finding']);
+  });
+
+  it('getObservationsByIds still excludes a row from an unrelated project', () => {
+    const rows = store.getObservationsByIds([obsId('Foreign finding')], { project: 'kedo' });
+    expect(rows.length).toBe(0);
+  });
 });

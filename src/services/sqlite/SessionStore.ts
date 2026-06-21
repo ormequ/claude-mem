@@ -1498,8 +1498,11 @@ export class SessionStore {
     const additionalConditions: string[] = [];
 
     if (project) {
-      additionalConditions.push('project = ?');
-      params.push(project);
+      // Honor the adopt soft-merge pointer (see SessionSearch.buildFilterClause).
+      // Semantic search hydrates Chroma-matched IDs through here scoped to the
+      // parent project; a bare `project = ?` dropped adopted worktree rows.
+      additionalConditions.push('(project = ? OR merged_into_project = ?)');
+      params.push(project, project);
     }
 
     if (type) {
@@ -2156,9 +2159,9 @@ export class SessionStore {
     const params: any[] = [...ids];
 
     const whereClause = project
-      ? `WHERE id IN (${placeholders}) AND project = ?`
+      ? `WHERE id IN (${placeholders}) AND (project = ? OR merged_into_project = ?)`
       : `WHERE id IN (${placeholders})`;
-    if (project) params.push(project);
+    if (project) params.push(project, project);
 
     const stmt = this.db.prepare(`
       SELECT * FROM session_summaries

@@ -30,8 +30,10 @@ export function getObservationsByIds(
   const additionalConditions: string[] = [];
 
   if (project) {
-    additionalConditions.push('project = ?');
-    params.push(project);
+    // Honor the adopt soft-merge pointer (see SessionSearch.buildFilterClause)
+    // so ID hydration scoped to a parent project keeps adopted worktree rows.
+    additionalConditions.push('(project = ? OR merged_into_project = ?)');
+    params.push(project, project);
   }
 
   if (type) {
