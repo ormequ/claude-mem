@@ -14,6 +14,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import type { ObservationSearchResult, SessionSummarySearchResult } from '../../../sqlite/types.js';
 import { captureEvent } from '../../../telemetry/telemetry.js';
+import { telemetryBuffer } from '../../../telemetry/buffer.js';
 
 const ONBOARDING_EXPLAINER_PATH: string = path.resolve(__dirname, '../skills/how-it-works/onboarding-explainer.md');
 
@@ -430,7 +431,9 @@ export class SearchRoutes extends BaseRouteHandler {
         forHuman
       );
     } catch (error) {
-      captureEvent('context_injected', {
+      // context_injected is HOOK-level (no sessionDbId in scope) → null key,
+      // routed to the 5-minute time-window rollup, NOT the per-session path.
+      telemetryBuffer.record('context_injected', null, {
         outcome: 'error',
         duration_ms: Date.now() - injectStartedAt,
       });
@@ -442,7 +445,8 @@ export class SearchRoutes extends BaseRouteHandler {
     // responses (stats === null) injected no memory and are not counted.
     if (contextResult.stats) {
       const settingsSnapshot = this.getCachedSettings();
-      captureEvent('context_injected', {
+      // Hook-level → null key, time-window rollup (see error branch above).
+      telemetryBuffer.record('context_injected', null, {
         outcome: 'ok',
         duration_ms: Date.now() - injectStartedAt,
         mode: settingsSnapshot.CLAUDE_MEM_MODE,
