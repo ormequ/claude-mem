@@ -156,8 +156,15 @@ export class SessionSearch {
     const conditions: string[] = [];
 
     if (filters.project) {
-      conditions.push(`${tableAlias}.project = ?`);
-      params.push(filters.project);
+      // Honor the soft-adoption pointer the same way the session-start inject
+      // path does (ObservationCompiler / PaginationHelper). `adopt` sets
+      // merged_into_project without rewriting the raw project column, so a bare
+      // `project = ?` made adopted worktree rows invisible to search /
+      // build_corpus when scoped to the parent project. The column is
+      // guaranteed by schema.sql + the migration runner, so no presence guard
+      // is needed (matching inject).
+      conditions.push(`(${tableAlias}.project = ? OR ${tableAlias}.merged_into_project = ?)`);
+      params.push(filters.project, filters.project);
     }
 
     // Source-scoping (#2389): when a platformSource is supplied, restrict to

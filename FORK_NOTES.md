@@ -49,6 +49,11 @@ This fork keeps local claude-mem fixes in source control instead of patching
   the same project memory as Claude Code for the same workspace.
 - `prime_corpus` cold-start behavior returns a queued/try-again-later response
   instead of failing the tool call on a worker timeout.
+- `search` / `build_corpus` honor the `adopt` soft-merge pointer:
+  `buildFilterClause` matches `project = ? OR merged_into_project = ?` (mirroring
+  the session-start inject path), so adopted worktree observations are visible to
+  manual search and corpus builds scoped to the parent project, not just to
+  automatic context injection.
 
 ## Upgrade checklist
 
