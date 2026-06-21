@@ -71,6 +71,60 @@ describe('smart-file-read fork fixes', () => {
     }
   });
 
+  it('treats a 0-byte placeholder binary as missing (no usable PATH/install fallback)', () => {
+    const packageDir = mkdtempSync(join(tmpdir(), 'cmem-tree-sitter-empty-'));
+    try {
+      // Simulate the placeholder left when the postinstall download is skipped/blocked.
+      writeFileSync(join(packageDir, process.platform === 'win32' ? 'tree-sitter.exe' : 'tree-sitter'), '');
+      // No install.js to repair it, so the empty placeholder must not be returned.
+      expect(ensureTreeSitterCliBinary(packageDir)).toBeNull();
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses PHP classes, methods, and functions through tree-sitter', () => {
+    const source = [
+      '<?php',
+      'namespace App\\Services;',
+      'class UserService {',
+      '  public function findUser(int $id): ?User { return null; }',
+      '}',
+      'function helper_fn(string $x): string { return $x; }',
+      '',
+    ].join('\n');
+
+    const parsed = parseFile(source, 'UserService.php', process.cwd());
+
+    expect(parsed.language).toBe('php');
+    const names = parsed.symbols.flatMap((s) => [s.name, ...(s.children ?? []).map((c) => c.name)]);
+    expect(names).toContain('UserService');
+    expect(names).toContain('findUser');
+    expect(names).toContain('helper_fn');
+  });
+
+  it('parses a Vue SFC <script setup> block as its script language', () => {
+    const source = [
+      '<script setup lang="ts">',
+      "import { ref } from 'vue'",
+      'const count = ref(0)',
+      'function increment() { count.value++ }',
+      '</script>',
+      '<template><button @click="increment">{{ count }}</button></template>',
+      '',
+    ].join('\n');
+
+    const parsed = parseFile(source, 'Counter.vue', process.cwd());
+
+    expect(parsed.language).toBe('vue');
+    expect(parsed.symbols.map((s) => s.name)).toContain('increment');
+    // line numbers stay aligned to the original SFC: increment is on the 4th
+    // line (0-indexed 3), proving the blanked markup preserved positions.
+    const increment = parsed.symbols.find((s) => s.name === 'increment');
+    expect(increment?.lineStart).toBe(3);
+    expect(parsed.imports.join('\n')).toContain("from 'vue'");
+  });
+
   it('parses and unfolds Go functions through tree-sitter', () => {
     const source = [
       'package grpcutil',

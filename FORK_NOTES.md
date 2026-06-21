@@ -49,6 +49,15 @@ This fork keeps local claude-mem fixes in source control instead of patching
   the same project memory as Claude Code for the same workspace.
 - `prime_corpus` cold-start behavior returns a queued/try-again-later response
   instead of failing the tool call on a worker timeout.
+- Smart file tools support Vue/Svelte single-file components: the `<script>`
+  body is parsed under its own grammar (TS/JS) with the surrounding markup
+  blanked out so line numbers stay aligned. No SFC grammar needed.
+- tree-sitter binary resolution is resilient: a 0-byte placeholder (left when the
+  postinstall download is skipped/blocked) is ignored, and a working
+  `tree-sitter` on PATH or a common location (`/opt/homebrew/bin`, cargo) is
+  preferred over re-downloading from the GitHub release CDN (which some networks
+  block). Install the CLI once with `brew install tree-sitter-cli` (0.26.x) if the
+  bundled download is unavailable.
 - `search` / `build_corpus` honor the `adopt` soft-merge pointer end to end:
   both the FTS/no-query SQLite filter (`buildFilterClause`) and the
   semantic-result ID hydration (`getObservationsByIds` /

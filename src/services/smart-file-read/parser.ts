@@ -1,8 +1,8 @@
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { createRequire } from "node:module";
 import { logger } from "../../utils/logger.js";
 
@@ -481,10 +481,34 @@ function getQueryFile(queryKey: string): string {
 
 let cachedBinPath: string | null = null;
 
+function isUsableBinary(binPath: string): boolean {
+  // A 0-byte placeholder is left behind when tree-sitter-cli's postinstall
+  // binary download is skipped (--ignore-scripts) or blocked (the GitHub release
+  // CDN is unreachable in some networks). Treat it as missing so we fall back to
+  // a PATH binary instead of trying to exec an empty file.
+  try {
+    return existsSync(binPath) && statSync(binPath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function pathBinaryWorks(command: string): boolean {
+  try {
+    execFileSync(command, ["--version"], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ensureTreeSitterCliBinary(packageDir: string): string | null {
   const executableName = process.platform === "win32" ? "tree-sitter.exe" : "tree-sitter";
   const binPath = join(packageDir, executableName);
-  if (existsSync(binPath)) return binPath;
+  if (isUsableBinary(binPath)) return binPath;
 
   const installScript = join(packageDir, "install.js");
   if (!existsSync(installScript)) return null;
@@ -513,15 +537,48 @@ export function ensureTreeSitterCliBinary(packageDir: string): string | null {
 function getTreeSitterBin(): string {
   if (cachedBinPath) return cachedBinPath;
 
+  let packageDir: string | null = null;
   try {
-    const pkgPath = _require.resolve("tree-sitter-cli/package.json");
-    const binPath = ensureTreeSitterCliBinary(dirname(pkgPath));
+    packageDir = dirname(_require.resolve("tree-sitter-cli/package.json"));
+  } catch {
+    // [ANTI-PATTERN IGNORED]: tree-sitter-cli not in node_modules is expected; falls back to PATH
+  }
+
+  // 1. A valid bundled binary already present in node_modules.
+  if (packageDir) {
+    const executableName = process.platform === "win32" ? "tree-sitter.exe" : "tree-sitter";
+    const bundled = join(packageDir, executableName);
+    if (isUsableBinary(bundled)) {
+      cachedBinPath = bundled;
+      return bundled;
+    }
+  }
+
+  // 2. A working `tree-sitter` on PATH or a common install location (e.g.
+  // `brew install tree-sitter-cli` → /opt/homebrew/bin). Prefer this over the
+  // download below so a missing/placeholder bundled binary does not stall every
+  // parse on a (possibly blocked) GitHub release download. Absolute candidates
+  // cover MCP/worker processes spawned with a minimal PATH.
+  const pathCandidates = [
+    "tree-sitter",
+    "/opt/homebrew/bin/tree-sitter",
+    "/usr/local/bin/tree-sitter",
+    join(homedir(), ".cargo", "bin", "tree-sitter"),
+  ];
+  for (const candidate of pathCandidates) {
+    if (pathBinaryWorks(candidate)) {
+      cachedBinPath = candidate;
+      return cachedBinPath;
+    }
+  }
+
+  // 3. Last resort: download the bundled binary (auto-heals when network allows).
+  if (packageDir) {
+    const binPath = ensureTreeSitterCliBinary(packageDir);
     if (binPath) {
       cachedBinPath = binPath;
       return binPath;
     }
-  } catch {
-    // [ANTI-PATTERN IGNORED]: tree-sitter-cli not in node_modules is expected; falls back to PATH
   }
 
   cachedBinPath = "tree-sitter";
@@ -827,39 +884,105 @@ export function findProjectRoot(filePath: string): string | undefined {
   }
 }
 
+const SFC_EXTENSIONS = new Set([".vue", ".svelte"]);
+
+const TMP_EXT_BY_LANGUAGE: Record<string, string> = {
+  tsx: ".tsx",
+  typescript: ".ts",
+  javascript: ".js",
+};
+
+interface SfcScript {
+  content: string;     // markup blanked out, <script> body kept at original lines
+  language: string;    // language to parse the script body with
+}
+
+// Vue/Svelte single-file components keep their real symbols inside the <script>
+// block. tree-sitter cannot cross the SFC→script grammar boundary via CLI
+// queries, so we parse the script body with its own grammar and blank every
+// non-script line (line positions are preserved, so reported line numbers and
+// signature slices stay correct against the original file).
+function extractSfcScript(content: string): SfcScript | null {
+  const lines = content.split("\n");
+  const openRe = /<script\b([^>]*)>/i;
+  const closeRe = /<\/script>/i;
+
+  let chosen: { start: number; end: number; attrs: string } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(openRe);
+    if (!open) continue;
+    let end = -1;
+    for (let j = i; j < lines.length; j++) {
+      if (closeRe.test(lines[j])) { end = j; break; }
+    }
+    if (end === -1) continue;
+    const attrs = open[1] || "";
+    // Prefer Vue's <script setup> when a file has both <script> and <script setup>.
+    if (!chosen || /\bsetup\b/i.test(attrs)) chosen = { start: i, end, attrs };
+    i = end;
+  }
+  if (!chosen) return null;
+
+  const isTs = /\blang\s*=\s*["']?(ts|typescript|tsx)["']?/i.test(chosen.attrs);
+  const blanked = lines.map((line, idx) =>
+    idx > chosen!.start && idx < chosen!.end ? line : ""
+  );
+  return { content: blanked.join("\n"), language: isTs ? "typescript" : "javascript" };
+}
+
 export function parseFile(content: string, filePath: string, projectRoot?: string): FoldedFile {
   const userConfig = projectRoot ? loadUserGrammars(projectRoot) : EMPTY_USER_GRAMMAR_CONFIG;
-  const language = detectLanguageWithUserGrammars(filePath, userConfig);
   const lines = content.split("\n");
+  const ext = filePath.slice(filePath.lastIndexOf(".")) || ".txt";
 
-  const grammarPath = resolveGrammarPathWithFallback(language, projectRoot);
+  let parseContent = content;
+  let parseLanguage: string;
+  let displayLanguage: string;
+
+  if (SFC_EXTENSIONS.has(ext)) {
+    const sfc = extractSfcScript(content);
+    displayLanguage = ext.slice(1); // "vue" / "svelte"
+    if (!sfc) {
+      return {
+        filePath, language: displayLanguage, symbols: [], imports: [],
+        totalLines: lines.length, foldedTokenEstimate: 50,
+      };
+    }
+    parseContent = sfc.content;
+    parseLanguage = sfc.language;
+  } else {
+    parseLanguage = detectLanguageWithUserGrammars(filePath, userConfig);
+    displayLanguage = parseLanguage;
+  }
+
+  const grammarPath = resolveGrammarPathWithFallback(parseLanguage, projectRoot);
   if (!grammarPath) {
     return {
-      filePath, language, symbols: [], imports: [],
+      filePath, language: displayLanguage, symbols: [], imports: [],
       totalLines: lines.length, foldedTokenEstimate: 50,
     };
   }
 
-  const queryKey = getUserAwareQueryKey(language, userConfig);
+  const queryKey = getUserAwareQueryKey(parseLanguage, userConfig);
   const queryFile = getQueryFile(queryKey);
 
-  const ext = filePath.slice(filePath.lastIndexOf(".")) || ".txt";
+  const tmpExt = SFC_EXTENSIONS.has(ext) ? (TMP_EXT_BY_LANGUAGE[parseLanguage] ?? ".ts") : ext;
   const tmpDir = mkdtempSync(join(tmpdir(), "smart-src-"));
-  const tmpFile = join(tmpDir, `source${ext}`);
-  writeFileSync(tmpFile, content);
+  const tmpFile = join(tmpDir, `source${tmpExt}`);
+  writeFileSync(tmpFile, parseContent);
 
   try {
     const matches = runQuery(queryFile, tmpFile, grammarPath);
-    const result = buildSymbols(matches, lines, language);
+    const result = buildSymbols(matches, lines, parseLanguage);
 
     const folded = formatFoldedView({
-      filePath, language,
+      filePath, language: displayLanguage,
       symbols: result.symbols, imports: result.imports,
       totalLines: lines.length, foldedTokenEstimate: 0,
     });
 
     return {
-      filePath, language,
+      filePath, language: displayLanguage,
       symbols: result.symbols, imports: result.imports,
       totalLines: lines.length,
       foldedTokenEstimate: Math.ceil(folded.length / 4),
@@ -876,8 +999,16 @@ export function parseFilesBatch(
   const results = new Map<string, FoldedFile>();
   const userConfig = projectRoot ? loadUserGrammars(projectRoot) : EMPTY_USER_GRAMMAR_CONFIG;
 
+  // SFC files (.vue/.svelte) need the markup blanked and the <script> body
+  // re-parsed under its own grammar; the batch path queries raw on-disk files,
+  // so delegate these to parseFile which handles the temp-file rewrite.
   const languageGroups = new Map<string, typeof files>();
   for (const file of files) {
+    const ext = file.relativePath.slice(file.relativePath.lastIndexOf("."));
+    if (SFC_EXTENSIONS.has(ext)) {
+      results.set(file.relativePath, parseFile(file.content, file.relativePath, projectRoot));
+      continue;
+    }
     const language = detectLanguageWithUserGrammars(file.relativePath, userConfig);
     if (!languageGroups.has(language)) languageGroups.set(language, []);
     languageGroups.get(language)!.push(file);
