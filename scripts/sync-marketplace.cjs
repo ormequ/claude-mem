@@ -1,9 +1,28 @@
 #!/usr/bin/env node
 
 const { execSync } = require('child_process');
-const { existsSync, readFileSync } = require('fs');
+const { existsSync, readFileSync, readdirSync, rmSync, statSync } = require('fs');
 const path = require('path');
 const os = require('os');
+
+// Keep in sync with DEFAULT_CLAUDE_MEM_SKILLS in src/services/integrations/SkillSelection.ts
+const DEFAULT_CLAUDE_MEM_SKILLS = new Set([
+  'mem-search', 'smart-explore', 'learn-codebase', 'how-it-works',
+  'timeline-report', 'weekly-digests', 'standup', 'pathfinder',
+]);
+
+// Mirror `npx claude-mem install` skill filtering: dev sync copies plugin/ wholesale,
+// so without this the marketplace/cache get all skills (e.g. /design-is) regardless.
+function filterSkills(skillsDir) {
+  if (process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS?.trim().toLowerCase() === 'true') return;
+  if (!existsSync(skillsDir)) return;
+  for (const entry of readdirSync(skillsDir)) {
+    const entryPath = path.join(skillsDir, entry);
+    if (statSync(entryPath).isDirectory() && !DEFAULT_CLAUDE_MEM_SKILLS.has(entry)) {
+      rmSync(entryPath, { recursive: true, force: true });
+    }
+  }
+}
 
 const INSTALLED_PATH = path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'ormequ');
 const CACHE_BASE_PATH = path.join(os.homedir(), '.claude', 'plugins', 'cache', 'ormequ', 'claude-mem');
@@ -157,6 +176,9 @@ try {
 
   console.log(`Running bun install in cache folder (version ${version})...`);
   execSync(`bun install`, { cwd: CACHE_VERSION_PATH, stdio: 'inherit' });
+
+  filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
+  filterSkills(path.join(CACHE_VERSION_PATH, 'skills'));
 
   console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
 
