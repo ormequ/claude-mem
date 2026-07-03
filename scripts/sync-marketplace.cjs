@@ -163,7 +163,10 @@ try {
   );
 
   const version = getPluginVersion();
-  const CACHE_VERSION_PATH = path.join(CACHE_BASE_PATH, version);
+  // Claude Code normalizes semver build-metadata '+' to '-' in the cache dir name
+  // (see installPath in ~/.claude/plugins/installed_plugins.json). Match it or we
+  // mirror into a phantom dir Claude never loads.
+  const CACHE_VERSION_PATH = path.join(CACHE_BASE_PATH, version.replace(/\+/g, '-'));
 
   const pluginDir = path.join(rootDir, 'plugin');
   const pluginGitignoreExcludes = getGitignoreExcludes(pluginDir);
