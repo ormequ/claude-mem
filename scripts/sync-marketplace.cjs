@@ -7,7 +7,7 @@ const os = require('os');
 
 // Keep in sync with DEFAULT_CLAUDE_MEM_SKILLS in src/services/integrations/SkillSelection.ts
 const DEFAULT_CLAUDE_MEM_SKILLS = new Set([
-  'mem-search', 'smart-explore', 'learn-codebase', 'how-it-works',
+  'mem-search', 'learn-codebase', 'how-it-works',
   'timeline-report', 'weekly-digests', 'standup', 'pathfinder',
 ]);
 
