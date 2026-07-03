@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 const { execSync } = require('child_process');
-const { existsSync, readFileSync, readdirSync, rmSync, statSync } = require('fs');
+const { existsSync, readFileSync, readdirSync, rmSync, statSync, copyFileSync } = require('fs');
 const path = require('path');
 const os = require('os');
 
 // Keep in sync with DEFAULT_CLAUDE_MEM_SKILLS in src/services/integrations/SkillSelection.ts
 const DEFAULT_CLAUDE_MEM_SKILLS = new Set([
-  'mem-search', 'learn-codebase', 'how-it-works',
+  'mem-search', 'smart-explore', 'learn-codebase', 'how-it-works',
   'timeline-report', 'weekly-digests', 'standup', 'pathfinder',
 ]);
 
@@ -182,6 +182,16 @@ try {
 
   filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
   filterSkills(path.join(CACHE_VERSION_PATH, 'skills'));
+
+  // rsync's gitignore excludes drop tracked-but-ignored files. plugin/.mcp.json is
+  // force-tracked but matched by the root .gitignore `.mcp.json` line, so it never
+  // reaches the copy — and without it Claude Code doesn't register the MCP server
+  // when the marketplace points at this copy. Restore it explicitly.
+  const mcpSrc = path.join(rootDir, 'plugin', '.mcp.json');
+  if (existsSync(mcpSrc)) {
+    copyFileSync(mcpSrc, path.join(INSTALLED_PATH, 'plugin', '.mcp.json'));
+    copyFileSync(mcpSrc, path.join(CACHE_VERSION_PATH, '.mcp.json'));
+  }
 
   console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
 

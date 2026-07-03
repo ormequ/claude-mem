@@ -3,6 +3,7 @@ import path from 'path';
 
 export const DEFAULT_CLAUDE_MEM_SKILLS = [
   'mem-search',
+  'smart-explore',
   'learn-codebase',
   'how-it-works',
   'timeline-report',
