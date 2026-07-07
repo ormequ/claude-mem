@@ -2,7 +2,7 @@
 import path from 'path';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { getWorkerPort, getWorkerHost, fetchWithTimeout, resolveWorkerScriptPath } from '../shared/worker-utils.js';
@@ -16,15 +16,18 @@ import { getAuthMethodDescription } from '../shared/EnvManager.js';
 import { logger } from '../utils/logger.js';
 import { ChromaMcpManager } from './sync/ChromaMcpManager.js';
 import { ChromaSync } from './sync/ChromaSync.js';
+import { openConfiguredSqliteDatabase } from './sqlite/connection.js';
 import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } from '../supervisor/index.js';
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 
 import { ensureWorkerStarted as ensureWorkerStartedShared, type WorkerStartResult } from './worker-spawner.js';
 import { acquireSpawnLock, releaseSpawnLock } from '../shared/worker-spawn-gate.js';
+import { snapshotDependencyHealth, type DependencyHealthSnapshot } from '../shared/dependency-health.js';
 import { captureEvent, captureException, shutdownTelemetry, enableExceptionAutocaptureForWorker } from './telemetry/telemetry.js';
 import { telemetryBuffer } from './telemetry/buffer.js';
 import { collectInstallStats } from './telemetry/install-stats.js';
 import { runHistoricalBackfill } from './telemetry/backfill.js';
+import { runWorkerDependencyPreflight } from './worker/dependency-preflight.js';
 
 export { isPluginDisabledInClaudeSettings } from '../shared/plugin-state.js';
 import { isPluginDisabledInClaudeSettings } from '../shared/plugin-state.js';
@@ -37,7 +40,6 @@ import {
   readPidFile,
   removePidFileIfOwner,
   getPlatformTimeout,
-  runOneTimeChromaMigration,
   runOneTimeCwdRemap,
   cleanStalePidFile,
   verifyPidFileOwnership,
@@ -67,12 +69,11 @@ import {
 import { ServerV1Routes } from '../server/routes/v1/ServerV1Routes.js';
 
 import {
-  updateCursorContextForProject,
   handleCursorCommand
 } from './integrations/CursorHooksInstaller.js';
 import {
-  handleGeminiCliCommand
-} from './integrations/GeminiCliHooksInstaller.js';
+  handleAntigravityCliCommand
+} from './integrations/AntigravityCliHooksInstaller.js';
 
 import { DatabaseManager } from './worker/DatabaseManager.js';
 import { SessionManager } from './worker/SessionManager.js';
@@ -109,18 +110,29 @@ import { KnowledgeAgent } from './worker/knowledge/KnowledgeAgent.js';
 
 export interface StatusOutput {
   continue: true;
-  suppressOutput: true;
+  suppressOutput?: true;
   status: 'ready' | 'error';
   message?: string;
 }
 
-export function buildStatusOutput(status: 'ready' | 'error', message?: string): StatusOutput {
-  return {
+export interface StatusOutputOptions {
+  includeSuppressOutput?: boolean;
+}
+
+export function buildStatusOutput(
+  status: 'ready' | 'error',
+  message?: string,
+  options: StatusOutputOptions = {}
+): StatusOutput {
+  const output: StatusOutput = {
     continue: true,
-    suppressOutput: true,
     status,
     ...(message && { message })
   };
+  if (options.includeSuppressOutput !== false) {
+    output.suppressOutput = true;
+  }
+  return output;
 }
 
 // Closed enum for worker_stopped telemetry — definition (and its
@@ -140,6 +152,7 @@ function writeCleanShutdownSentinel(): void {
     ensureDir(DATA_DIR);
     writeFileSync(CLEAN_SHUTDOWN_SENTINEL_PATH, new Date().toISOString());
   } catch (error: unknown) {
+    // [ANTI-PATTERN IGNORED]: sentinel is best-effort crash-detection metadata; a failed write must not abort graceful shutdown. Logged at warn with path; worst case the next boot reports 'crash' instead of 'clean'.
     if (error instanceof Error) {
       logger.warn('SYSTEM', 'Failed to write clean-shutdown sentinel', { path: CLEAN_SHUTDOWN_SENTINEL_PATH }, error);
     } else {
@@ -155,6 +168,7 @@ function readAndClearCleanShutdownSentinel(): string | null {
   try {
     contents = readFileSync(CLEAN_SHUTDOWN_SENTINEL_PATH, 'utf-8').trim();
   } catch (error: unknown) {
+    // [ANTI-PATTERN IGNORED]: sentinel read is best-effort crash-detection metadata; startup must proceed even if the sentinel is unreadable. Logged at warn with path; falls through to the delete, and the caller sees contents=null.
     if (error instanceof Error) {
       logger.warn('SYSTEM', 'Failed to read clean-shutdown sentinel', { path: CLEAN_SHUTDOWN_SENTINEL_PATH }, error);
     } else {
@@ -166,6 +180,7 @@ function readAndClearCleanShutdownSentinel(): string | null {
     // crash as 'clean'.
     unlinkSync(CLEAN_SHUTDOWN_SENTINEL_PATH);
   } catch (error: unknown) {
+    // [ANTI-PATTERN IGNORED]: sentinel delete is best-effort; startup must proceed even if the unlink fails. Logged at warn with path; worst case a stale sentinel mislabels one later crash as 'clean'.
     if (error instanceof Error) {
       logger.warn('SYSTEM', 'Failed to remove clean-shutdown sentinel', { path: CLEAN_SHUTDOWN_SENTINEL_PATH }, error);
     } else {
@@ -252,6 +267,7 @@ export class WorkerService implements WorkerRef {
     this.server = new Server({
       getInitializationComplete: () => this.initializationCompleteFlag,
       getMcpReady: () => this.mcpReady,
+      getDependencyHealth: () => snapshotDependencyHealth(),
       onShutdown: (reason) => this.shutdown(reason ?? 'stop'),
       onRestart: () => this.shutdown('restart'),
       workerPath: __filename,
@@ -306,7 +322,13 @@ export class WorkerService implements WorkerRef {
     });
 
     this.server.app.use(['/api', '/v1'], async (req, res, next) => {
-      if (req.path === '/chroma/status' || req.path === '/health' || req.path === '/readiness' || req.path === '/version') {
+      if (
+        req.path === '/chroma/status' ||
+        req.path === '/health' ||
+        req.path === '/readiness' ||
+        req.path === '/version' ||
+        req.path === '/settings/dependency-health'
+      ) {
         next();
         return;
       }
@@ -430,9 +452,20 @@ export class WorkerService implements WorkerRef {
       ModeManager.getInstance().loadMode(modeId);
       logger.info('SYSTEM', `Mode loaded: ${modeId}`);
 
-      if (settings.CLAUDE_MEM_MODE === 'local' || !settings.CLAUDE_MEM_MODE) {
-        logger.info('WORKER', 'Checking for one-time Chroma migration...');
-        runOneTimeChromaMigration();
+      const dependencyHealth = runWorkerDependencyPreflight({
+        settings,
+        classifyClaudeError,
+      });
+      if (dependencyHealth.degraded) {
+        logger.warn('SYSTEM', 'Dependency preflight found degraded optional setup', {
+          statuses: dependencyHealth.statuses.map(status => ({
+            dependency: status.dependency,
+            kind: status.kind,
+            message: status.message,
+          })),
+        });
+      } else {
+        logger.info('SYSTEM', 'Dependency preflight passed');
       }
 
       logger.info('WORKER', 'Checking for one-time CWD remap...');
@@ -484,15 +517,9 @@ export class WorkerService implements WorkerRef {
       this.server.registerRoutes(this.searchRoutes);
       logger.info('WORKER', 'SearchManager initialized and search routes registered');
 
-      const { SearchOrchestrator } = await import('./worker/search/SearchOrchestrator.js');
-      const corpusSearchOrchestrator = new SearchOrchestrator(
-        this.dbManager.getSessionSearch(),
-        this.dbManager.getSessionStore(),
-        this.dbManager.getChromaSync()
-      );
       const corpusBuilder = new CorpusBuilder(
         this.dbManager.getSessionStore(),
-        corpusSearchOrchestrator,
+        searchManager.getOrchestrator(),
         this.corpusStore
       );
       const knowledgeAgent = new KnowledgeAgent(this.corpusStore);
@@ -522,15 +549,14 @@ export class WorkerService implements WorkerRef {
             .get() as { platform_source?: string } | null;
           if (row?.platform_source) props.ide = row.platform_source;
         } catch (error) {
-          // Expected only before the schema exists; anything else (e.g. the
-          // wrong-table query this once masked) should be diagnosable.
-          logger.debug('SYSTEM', 'ide lookup for lifecycle telemetry failed', {}, error as Error);
+          // [ANTI-PATTERN IGNORED]: telemetry enrichment is best-effort — the worker_started event must ship even without the ide property. Expected only before the schema exists; logged at debug so anything else (e.g. the wrong-table query this once masked) stays diagnosable.
+          logger.debug('SYSTEM', 'ide lookup for lifecycle telemetry failed', {}, error instanceof Error ? error : new Error(String(error)));
         }
         try {
           Object.assign(props, collectInstallStats(this.dbManager.getConnection()));
         } catch (error) {
-          // Snapshot is best-effort; the lifecycle event still ships without it.
-          logger.debug('SYSTEM', 'Install stats snapshot failed', {}, error as Error);
+          // [ANTI-PATTERN IGNORED]: install-stats snapshot is best-effort telemetry enrichment; the lifecycle event still ships without it. Logged at debug for diagnosability.
+          logger.debug('SYSTEM', 'Install stats snapshot failed', {}, error instanceof Error ? error : new Error(String(error)));
         }
         // Process health for the daily heartbeat: memoryUsage() returns bytes;
         // the scrubber drops non-finite numbers, so round to whole MiB.
@@ -586,34 +612,37 @@ export class WorkerService implements WorkerRef {
 
   private async runMcpSelfCheck(mcpServerPath: string): Promise<void> {
     try {
-      getSupervisor().assertCanSpawn('mcp server');
-      const transport = new StdioClientTransport({
-        command: process.execPath,
-        args: [mcpServerPath],
-        env: Object.fromEntries(
-          Object.entries(sanitizeEnv(process.env)).filter(([, value]) => value !== undefined)
-        ) as Record<string, string>
-      });
-
-      const MCP_INIT_TIMEOUT_MS = 60000;
-      const mcpConnectionPromise = this.mcpClient.connect(transport);
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(
-          () => reject(new Error('MCP connection timeout')),
-          MCP_INIT_TIMEOUT_MS
-        );
-      });
-
-      await Promise.race([mcpConnectionPromise, timeoutPromise]);
-      logger.info('WORKER', 'MCP loopback self-check connected successfully');
-
-      await transport.close();
+      await this.connectMcpLoopback(mcpServerPath);
     } catch (error) {
-      logger.warn('WORKER', 'MCP loopback self-check failed', { 
-        error: error instanceof Error ? error.message : String(error) 
-      });
+      // [ANTI-PATTERN IGNORED]: loopback self-check is diagnostic only — a failed probe must not kill a worker that is otherwise serving requests. Logged at warn with the full error.
+      logger.warn('WORKER', 'MCP loopback self-check failed', {}, error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  private async connectMcpLoopback(mcpServerPath: string): Promise<void> {
+    getSupervisor().assertCanSpawn('mcp server');
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [mcpServerPath],
+      env: Object.fromEntries(
+        Object.entries(sanitizeEnv(process.env)).filter(([, value]) => value !== undefined)
+      ) as Record<string, string>
+    });
+
+    const MCP_INIT_TIMEOUT_MS = 60000;
+    const mcpConnectionPromise = this.mcpClient.connect(transport);
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error('MCP connection timeout')),
+        MCP_INIT_TIMEOUT_MS
+      );
+    });
+
+    await Promise.race([mcpConnectionPromise, timeoutPromise]);
+    logger.info('WORKER', 'MCP loopback self-check connected successfully');
+
+    await transport.close();
   }
 
   private async startTranscriptWatcher(settings: ReturnType<typeof SettingsDefaultsManager.loadFromFile>): Promise<void> {
@@ -777,7 +806,7 @@ export function parseWorkerServiceCommand(argv: string[]): ParsedWorkerCommand {
     if (maybeSubCommand && lifecycleCommands.has(maybeSubCommand)) {
       return { command: `server-${maybeSubCommand}`, args: rest };
     }
-    const serverCommands = new Set(['logs', 'doctor', 'migrate', 'export', 'import', 'api-key', 'keys', 'jobs']);
+    const serverCommands = new Set(['api-key', 'keys', 'jobs']);
     return {
       command: maybeSubCommand && serverCommands.has(maybeSubCommand) ? `server-${maybeSubCommand}` : 'server-help',
       args: rest,
@@ -798,15 +827,9 @@ export function parseWorkerServiceCommand(argv: string[]): ParsedWorkerCommand {
   };
 }
 
-function printServerCommandUnsupported(command: string): never {
-  console.error(`Server command not implemented yet: ${command}`);
-  console.error('This worker bundle accepts the CLI route, but no backend API exists for it yet.');
-  process.exit(1);
-}
-
 function printServerCommandHelp(): never {
   console.error('Usage: worker-service server <command>');
-  console.error('Commands: start, stop, restart, status, logs, doctor, migrate, export, import, api-key create|list|revoke');
+  console.error('Commands: start, stop, restart, status, api-key create|list|revoke');
   process.exit(1);
 }
 
@@ -815,15 +838,24 @@ function printWorkerAliasHelp(): never {
   process.exit(1);
 }
 
-function runServerBetaServiceCli(command: string, extraArgs: string[] = []): void {
-  const serverBetaScript = path.join(__dirname, 'server-beta-service.cjs');
-  if (!existsSync(serverBetaScript)) {
-    console.error(`Server beta script not found at: ${serverBetaScript}`);
-    console.error('Rebuild or reinstall claude-mem so server-beta-service.cjs is available.');
-    process.exit(1);
+function runServerServiceCli(command: string, extraArgs: string[] = []): void {
+  // Plan §1c line 149: try the post-rename script first, then fall back
+  // to the legacy `server-beta-service.cjs` so users running against an
+  // already-installed plugin cache (built before the rename) continue to
+  // dispatch without a forced reinstall.
+  let serverScript = path.join(__dirname, 'server-service.cjs');
+  if (!existsSync(serverScript)) {
+    const legacyScript = path.join(__dirname, 'server-beta-service.cjs');
+    if (existsSync(legacyScript)) {
+      serverScript = legacyScript;
+    } else {
+      console.error(`Server script not found at: ${serverScript}`);
+      console.error('Rebuild or reinstall claude-mem so server-service.cjs is available.');
+      process.exit(1);
+    }
   }
 
-  const child = spawn(process.execPath, [serverBetaScript, command, ...extraArgs], {
+  const child = spawn(process.execPath, [serverScript, command, ...extraArgs], {
     stdio: 'inherit',
     // Strip host CLI bleed-through (CLAUDE_CODE_*, including EFFORT_LEVEL) and
     // Anthropic credentials before handing env to the spawned daemon. The
@@ -832,7 +864,7 @@ function runServerBetaServiceCli(command: string, extraArgs: string[] = []): voi
     env: sanitizeEnv(process.env),
   });
   child.on('error', (error) => {
-    console.error(`Failed to start server beta command: ${error.message}`);
+    console.error(`Failed to start server command: ${error.message}`);
     process.exit(1);
   });
   child.on('close', (exitCode) => {
@@ -861,7 +893,7 @@ function parseServerApiKeyOptions(args: string[]): Record<string, string> {
 
 function openServerCommandDatabase(): Database {
   ensureDir(DATA_DIR);
-  return new Database(DB_PATH, { create: true, readwrite: true });
+  return openConfiguredSqliteDatabase(DB_PATH, { create: true, readwrite: true });
 }
 
 function runServerApiKeyCli(args: string[]): never {
@@ -966,7 +998,9 @@ async function main() {
   const port = getWorkerPort();
 
   function exitWithStatus(status: 'ready' | 'error', message?: string): never {
-    const output = buildStatusOutput(status, message);
+    const output = buildStatusOutput(status, message, {
+      includeSuppressOutput: process.env.CLAUDE_MEM_CODEX_HOOK !== '1',
+    });
     console.log(JSON.stringify(output));
     process.exit(0);
   }
@@ -1125,6 +1159,10 @@ async function main() {
         if (typeof health.workerPath === 'string') {
           console.log(`  Worker path: ${health.workerPath}`);
         }
+        const dependencyHint = formatDependencyHealthHint(health);
+        if (dependencyHint) {
+          console.log(dependencyHint);
+        }
         printQueueStatusIfBullMq(health);
         process.exit(0);
       }
@@ -1144,16 +1182,7 @@ async function main() {
     case 'server-stop':
     case 'server-restart':
     case 'server-status': {
-      runServerBetaServiceCli(command.slice('server-'.length));
-      break;
-    }
-
-    case 'server-logs':
-    case 'server-doctor':
-    case 'server-migrate':
-    case 'server-export':
-    case 'server-import': {
-      printServerCommandUnsupported(command.replace('-', ' '));
+      runServerServiceCli(command.slice('server-'.length));
       break;
     }
 
@@ -1172,16 +1201,16 @@ async function main() {
       break;
     }
 
-    // #2572 — `keys`/`jobs` are server-beta (Postgres) operability commands.
-    // Delegate to the server-beta script so they read the Postgres backend the
+    // #2572 — `keys`/`jobs` are server (Postgres) operability commands.
+    // Delegate to the server script so they read the Postgres backend the
     // server runtime actually uses, instead of the SQLite worker store.
     case 'server-keys': {
-      runServerBetaServiceCli('server', ['keys', ...commandArgs]);
+      runServerServiceCli('server', ['keys', ...commandArgs]);
       break;
     }
 
     case 'server-jobs': {
-      runServerBetaServiceCli('server', ['jobs', ...commandArgs]);
+      runServerServiceCli('server', ['jobs', ...commandArgs]);
       break;
     }
 
@@ -1202,10 +1231,10 @@ async function main() {
       break;
     }
 
-    case 'gemini-cli': {
-      const geminiSubcommand = process.argv[3];
-      const geminiResult = await handleGeminiCliCommand(geminiSubcommand, process.argv.slice(4));
-      process.exit(geminiResult);
+    case 'antigravity-cli': {
+      const antigravitySubcommand = process.argv[3];
+      const antigravityResult = await handleAntigravityCliCommand(antigravitySubcommand, process.argv.slice(4));
+      process.exit(antigravityResult);
       break;
     }
 
@@ -1219,7 +1248,7 @@ async function main() {
       const event = process.argv[4];
       if (!platform || !event) {
         console.error('Usage: claude-mem hook <platform> <event>');
-        console.error('Platforms: claude-code, codex, cursor, gemini-cli, raw');
+        console.error('Platforms: claude-code, codex, cursor, antigravity-cli, raw');
         console.error('Events: context, session-init, observation, summarize, user-message');
         process.exit(1);
       }
@@ -1378,12 +1407,13 @@ async function main() {
   }
 }
 
-interface WorkerHealthSnapshot {
+export interface WorkerHealthSnapshot {
   status?: unknown;
   pid?: unknown;
   version?: unknown;
   uptime?: unknown;
   workerPath?: unknown;
+  dependencies?: DependencyHealthSnapshot;
   queue?: {
     redis?: {
       status?: string;
@@ -1394,6 +1424,25 @@ interface WorkerHealthSnapshot {
       error?: string;
     };
   };
+}
+
+export function formatDependencyHealthHint(health: WorkerHealthSnapshot): string | null {
+  const dependencies = health.dependencies;
+  if (!dependencies?.degraded || dependencies.statuses.length === 0) {
+    return null;
+  }
+
+  const labels = dependencies.statuses.map(status => {
+    if (status.dependency === 'claude_cli' && status.kind === 'setup_required') {
+      return 'Claude CLI setup required';
+    }
+    if (status.dependency === 'uvx' && status.kind === 'vector_search_unavailable') {
+      return 'uvx unavailable for vector search';
+    }
+    return `${status.dependency}: ${status.kind}`;
+  });
+
+  return `  Dependencies: degraded (${labels.join(', ')}). Run npx claude-mem doctor or open Settings for remediation.`;
 }
 
 /**
@@ -1408,6 +1457,7 @@ async function fetchWorkerHealth(port: number, timeoutMs: number): Promise<Worke
     const response = await fetchWithTimeout(`http://${getWorkerHost()}:${port}/api/health`, {}, timeoutMs);
     return await response.json() as WorkerHealthSnapshot;
   } catch {
+    // [ANTI-PATTERN IGNORED]: health probe — connection refused/timeout IS the "worker not running" answer, polled on every status check; logging would spam. null is the documented recovery value the callers branch on.
     return null;
   }
 }

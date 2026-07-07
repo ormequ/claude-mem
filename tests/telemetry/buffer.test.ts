@@ -72,7 +72,6 @@ describe('flushSession() — observer_turn_rollup', () => {
       duration_ms: 800,
       compression_ms: 400,
       model: 'claude-sonnet-4-5',
-      fabricated_count: 0,
     });
     telemetryBuffer.record('session_compressed', SID, {
       outcome: 'ok',
@@ -82,7 +81,6 @@ describe('flushSession() — observer_turn_rollup', () => {
       duration_ms: 1200,
       compression_ms: 600,
       model: 'claude-sonnet-4-5',
-      fabricated_count: 1,
     });
     telemetryBuffer.record('session_compressed', SID, {
       outcome: 'error',
@@ -92,7 +90,6 @@ describe('flushSession() — observer_turn_rollup', () => {
       duration_ms: 300,
       // compression_ms deliberately omitted — must be skipped from avg
       model: 'claude-haiku-3-5',
-      fabricated_count: 0,
     });
 
     const emitted = telemetryBuffer.flushSession(SID, 'session_end');
@@ -117,7 +114,6 @@ describe('flushSession() — observer_turn_rollup', () => {
     expect(p.outcomes_aborted).toBe(0);
     expect(p.outcomes_invalid_output).toBe(0);
     expect(p.top_model).toBe('claude-sonnet-4-5');
-    expect(p.fabrication_count).toBe(1);
     expect(typeof p.window_start_ts).toBe('number');
     expect(p.window_start_ts).toBeGreaterThan(0);
     // Phase 2 metadata
@@ -125,6 +121,37 @@ describe('flushSession() — observer_turn_rollup', () => {
     expect(p.window_seq).toBe(0);
     // sessionDbId must NEVER appear in emitted props (map key only)
     expect(p.sessionDbId).toBeUndefined();
+  });
+
+  it('sums generation-side observation volume and obs_type_* across the session', () => {
+    const SID = 7;
+    telemetryBuffer.record('session_compressed', SID, {
+      outcome: 'ok', cost_usd: 0.04, count: 5,
+      obs_type_bugfix: 2, obs_type_discovery: 1, obs_type_decision: 0,
+      obs_type_refactor: 1, obs_type_other: 1,
+    });
+    telemetryBuffer.record('session_compressed', SID, {
+      outcome: 'ok', cost_usd: 0.06, count: 3,
+      obs_type_bugfix: 0, obs_type_discovery: 2, obs_type_decision: 1,
+      obs_type_refactor: 0, obs_type_other: 0,
+    });
+
+    expect(telemetryBuffer.flushSession(SID, 'session_end')).toBe(true);
+    expect(postHogCaptureCalls.length).toBe(1);
+    const p = (postHogCaptureCalls[0] as { properties: Record<string, unknown> }).properties;
+
+    // rollup `count` is TURNS (records.length); observations_created is the sum
+    // of per-turn observation counts — distinct concepts.
+    expect(p.count).toBe(2);
+    expect(p.observations_created).toBe(8);
+    expect(p.total_cost_usd).toBeCloseTo(0.1, 6);
+    // cost-per-observation is now derivable from the rollup alone.
+    expect((p.total_cost_usd as number) / (p.observations_created as number)).toBeCloseTo(0.0125, 6);
+    expect(p.obs_type_bugfix).toBe(2);
+    expect(p.obs_type_discovery).toBe(3);
+    expect(p.obs_type_decision).toBe(1);
+    expect(p.obs_type_refactor).toBe(1);
+    expect(p.obs_type_other).toBe(1);
   });
 
   it('covers all outcome buckets correctly', () => {
@@ -312,9 +339,13 @@ describe('consent off ⇒ nothing sent', () => {
 
 describe('flush() — context_injected_rollup', () => {
   it('emits one rollup event with correct token sums and averages', () => {
-    telemetryBuffer.record('context_injected', null, { outcome: 'ok', tokens_injected: 500 });
-    telemetryBuffer.record('context_injected', null, { outcome: 'ok', tokens_injected: 1500 });
-    telemetryBuffer.record('context_injected', null, { outcome: 'error' }); // no tokens — skipped from avg
+    telemetryBuffer.record('context_injected', null, {
+      outcome: 'ok', tokens_injected: 500, observation_count: 12, tokens_saved_vs_naive: 4000,
+    });
+    telemetryBuffer.record('context_injected', null, {
+      outcome: 'ok', tokens_injected: 1500, observation_count: 30, tokens_saved_vs_naive: 11000,
+    });
+    telemetryBuffer.record('context_injected', null, { outcome: 'error' }); // no tokens/obs — skipped from sums
 
     telemetryBuffer.flush();
 
@@ -326,6 +357,9 @@ describe('flush() — context_injected_rollup', () => {
     expect(p.count).toBe(3);
     expect(p.total_tokens).toBe(2000);
     expect(p.avg_tokens).toBe(1000);
+    // Injection-side observation accounting folded into the rollup.
+    expect(p.total_observations_injected).toBe(42);
+    expect(p.total_tokens_saved_vs_naive).toBe(15000);
     expect(p.outcomes_ok).toBe(2);
     expect(p.outcomes_error).toBe(1);
     expect(typeof p.window_start_ts).toBe('number');

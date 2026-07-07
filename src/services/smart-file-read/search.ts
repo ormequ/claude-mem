@@ -1,7 +1,7 @@
 
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { parseFilesBatch, formatFoldedView, loadUserGrammars, type FoldedFile } from "./parser.js";
+import { parseFilesBatch, formatFoldedView, type FoldedFile } from "./parser.js";
 import { logger } from "../../utils/logger.js";
 
 const CODE_EXTENSIONS = new Set([
@@ -17,7 +17,6 @@ const CODE_EXTENSIONS = new Set([
   ".kt", ".kts",
   ".php",
   ".vue", ".svelte",
-  ".ex", ".exs",
   ".lua",
   ".scala", ".sc",
   ".sh", ".bash", ".zsh",
@@ -58,7 +57,7 @@ export interface SymbolMatch {
   matchReason: string; 
 }
 
-async function* walkDir(dir: string, rootDir: string, maxDepth: number = 20, extraExtensions?: Set<string>): AsyncGenerator<string> {
+async function* walkDir(dir: string, rootDir: string, maxDepth: number = 20): AsyncGenerator<string> {
   if (maxDepth <= 0) return;
 
   let entries;
@@ -66,7 +65,7 @@ async function* walkDir(dir: string, rootDir: string, maxDepth: number = 20, ext
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
     logger.debug('WORKER', `walkDir: failed to read directory ${dir}`, undefined, error instanceof Error ? error : undefined);
-    return; 
+    return;
   }
 
   for (const entry of entries) {
@@ -76,10 +75,10 @@ async function* walkDir(dir: string, rootDir: string, maxDepth: number = 20, ext
     const fullPath = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      yield* walkDir(fullPath, rootDir, maxDepth - 1, extraExtensions);
+      yield* walkDir(fullPath, rootDir, maxDepth - 1);
     } else if (entry.isFile()) {
       const ext = entry.name.slice(entry.name.lastIndexOf("."));
-      if (CODE_EXTENSIONS.has(ext) || (extraExtensions && extraExtensions.has(ext))) {
+      if (CODE_EXTENSIONS.has(ext)) {
         yield fullPath;
       }
     }
@@ -110,27 +109,15 @@ export async function searchCodebase(
     maxResults?: number;
     includeImports?: boolean;
     filePattern?: string;
-    projectRoot?: string;
   } = {}
 ): Promise<SearchResult> {
   const maxResults = options.maxResults || 20;
   const queryLower = query.toLowerCase();
   const queryParts = queryLower.split(/[\s_\-./]+/).filter(p => p.length > 0);
 
-  const projectRoot = options.projectRoot || rootDir;
-  const userConfig = loadUserGrammars(projectRoot);
-  const extraExtensions = new Set<string>();
-  for (const entry of Object.values(userConfig.grammars)) {
-    for (const ext of entry.extensions) {
-      if (!CODE_EXTENSIONS.has(ext)) {
-        extraExtensions.add(ext);
-      }
-    }
-  }
-
   const filesToParse: Array<{ absolutePath: string; relativePath: string; content: string }> = [];
 
-  for await (const filePath of walkDir(rootDir, rootDir, 20, extraExtensions.size > 0 ? extraExtensions : undefined)) {
+  for await (const filePath of walkDir(rootDir, rootDir, 20)) {
     if (options.filePattern) {
       const relPath = relative(rootDir, filePath);
       if (!relPath.toLowerCase().includes(options.filePattern.toLowerCase())) continue;
@@ -146,10 +133,7 @@ export async function searchCodebase(
     });
   }
 
-  const parsedFiles = parseFilesBatch(filesToParse, projectRoot);
-  const fileContentByPath = new Map(
-    filesToParse.map((file) => [file.relativePath, file.content.toLowerCase()])
-  );
+  const parsedFiles = parseFilesBatch(filesToParse);
 
   const foldedFiles: FoldedFile[] = [];
   const matchingSymbols: SymbolMatch[] = [];
@@ -159,8 +143,7 @@ export async function searchCodebase(
     totalSymbolsFound += countSymbols(parsed);
 
     const pathMatch = matchScore(relPath.toLowerCase(), queryParts);
-    const contentMatch = fileContentByPath.get(relPath)?.includes(queryLower) ?? false;
-    let fileHasMatch = pathMatch > 0 || contentMatch;
+    let fileHasMatch = pathMatch > 0;
     const fileSymbolMatches: SymbolMatch[] = [];
 
     const checkSymbols = (symbols: typeof parsed.symbols, parent?: string) => {
@@ -220,9 +203,7 @@ export async function searchCodebase(
 
   const trimmedSymbols = matchingSymbols.slice(0, maxResults);
   const relevantFiles = new Set(trimmedSymbols.map(s => s.filePath));
-  const trimmedFiles = foldedFiles
-    .filter(f => relevantFiles.size === 0 || relevantFiles.has(f.filePath))
-    .slice(0, maxResults);
+  const trimmedFiles = foldedFiles.filter(f => relevantFiles.has(f.filePath)).slice(0, maxResults);
 
   const tokenEstimate = trimmedFiles.reduce((sum, f) => sum + f.foldedTokenEstimate, 0);
 
@@ -277,22 +258,22 @@ export function formatSearchResults(result: SearchResult, query: string): string
   parts.push("");
 
   if (result.matchingSymbols.length === 0) {
-    parts.push("   No matching symbols found; showing file-level folded matches.");
-    parts.push("");
-  } else {
-    parts.push("── Matching Symbols ──");
-    parts.push("");
-    for (const match of result.matchingSymbols) {
-      parts.push(`  ${match.kind} ${match.symbolName} (${match.filePath}:${match.lineStart + 1})`);
-      parts.push(`    ${match.signature}`);
-      if (match.jsdoc) {
-        const firstLine = match.jsdoc.split("\n").find(l => l.replace(/^[\s*/]+/, "").trim().length > 0);
-        if (firstLine) {
-          parts.push(`    💬 ${firstLine.replace(/^[\s*/]+/, "").trim()}`);
-        }
+    parts.push("   No matching symbols found.");
+    return parts.join("\n");
+  }
+
+  parts.push("── Matching Symbols ──");
+  parts.push("");
+  for (const match of result.matchingSymbols) {
+    parts.push(`  ${match.kind} ${match.symbolName} (${match.filePath}:${match.lineStart + 1})`);
+    parts.push(`    ${match.signature}`);
+    if (match.jsdoc) {
+      const firstLine = match.jsdoc.split("\n").find(l => l.replace(/^[\s*/]+/, "").trim().length > 0);
+      if (firstLine) {
+        parts.push(`    💬 ${firstLine.replace(/^[\s*/]+/, "").trim()}`);
       }
-      parts.push("");
     }
+    parts.push("");
   }
 
   parts.push("── Folded File Views ──");

@@ -112,7 +112,11 @@ function resolveWorkerPort(): string {
   return SettingsDefaultsManager.get("CLAUDE_MEM_WORKER_PORT");
 }
 
-const WORKER_BASE_URL = `http://127.0.0.1:${resolveWorkerPort()}`;
+function resolveWorkerHost(): string {
+  return SettingsDefaultsManager.get("CLAUDE_MEM_WORKER_HOST");
+}
+
+const WORKER_BASE_URL = `http://${resolveWorkerHost()}:${resolveWorkerPort()}`;
 const MAX_TOOL_RESPONSE_LENGTH = 1000;
 const HARNESS_PROJECT_NAMES = new Set(["opencode", "global"]);
 const MEMORY_CONTEXT_MARKER = "<claude-mem-context>";

@@ -9,6 +9,7 @@ import {
   DEFAULT_CLAUDE_MEM_SKILLS,
   shouldInstallAllClaudeMemSkills,
 } from './SkillSelection.js';
+import { getWorkerHost, getWorkerPort } from '../../shared/worker-utils.js';
 
 const OPENCODE_PLUGIN_CONFIG_PATH = './plugins/claude-mem.js';
 
@@ -265,34 +266,20 @@ export function injectContextIntoAgentsMd(contextContent: string): number {
   }
 }
 
-export async function syncContextToAgentsMd(
-  port: number,
-  project: string,
-): Promise<void> {
-  try {
-    await fetchAndInjectOpenCodeContext(port, project);
-  } catch (error) {
-    if (error instanceof Error) {
-      logger.debug('WORKER', 'Worker not available during context sync', {}, error);
-    } else {
-      logger.debug('WORKER', 'Worker not available during context sync', {}, new Error(String(error)));
-    }
-  }
-}
+async function fetchRealContextFromWorker(): Promise<string | null> {
+  const workerHost = getWorkerHost();
+  const workerPort = getWorkerPort();
+  const workerUrl = `http://${workerHost}:${workerPort}`;
+  const healthResponse = await fetch(`${workerUrl}/api/readiness`);
+  if (!healthResponse.ok) return null;
 
-async function fetchAndInjectOpenCodeContext(port: number, project: string): Promise<void> {
-  const response = await fetch(
-    `http://127.0.0.1:${port}/api/context/inject?project=${encodeURIComponent(project)}`,
+  const contextResponse = await fetch(
+    `${workerUrl}/api/context/inject?project=opencode`,
   );
-  if (!response.ok) return;
+  if (!contextResponse.ok) return null;
 
-  const contextText = await response.text();
-  if (contextText && contextText.trim()) {
-    const injectResult = injectContextIntoAgentsMd(contextText);
-    if (injectResult !== 0) {
-      logger.warn('OPENCODE', 'Failed to inject context into AGENTS.md during sync');
-    }
-  }
+  const realContext = await contextResponse.text();
+  return realContext && realContext.trim() ? realContext : null;
 }
 
 function writeOrRemoveCleanedAgentsMd(agentsMdPath: string, trimmedContent: string): void {

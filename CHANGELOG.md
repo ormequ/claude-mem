@@ -4,6 +4,133 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [13.10.1] - 2026-07-04
+
+## Fixes
+
+- **Codex SessionStart hook no longer fails at startup.** When a hook errored before its handler ran (missing `session_id`, invalid `cwd`, or a missing transcript path), claude-mem fell back to a bare `{"continue":true}` regardless of which hook fired. Codex's strict `SessionStart` validator rejects that shape as "invalid session start JSON output," breaking context injection at Codex startup. The fallback now emits a valid `hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "" }` for the `context` hook, matching what Codex expects.
+- Fixed a related gap where the Codex adapter silently dropped an explicit empty-string `additionalContext` from its output instead of preserving it, which could leave the SessionStart payload incomplete.
+
+Closes #2947, #2972. Supersedes #2953 and #2948.
+
+## [13.10.0] - 2026-07-04
+
+## Antigravity CLI support, Gemini CLI removed
+
+Google deprecated Gemini CLI's free/individual tier (cutoff June 18, 2026) in favor of **Antigravity CLI**, the official successor announced May 19, 2026. This release migrates claude-mem accordingly.
+
+### Removed
+- Gemini CLI host integration (adapter, installer, IDE-detection entry, hooks, dedicated docs/tests). The separate, still-supported Gemini LLM/observation provider (`CLAUDE_MEM_GEMINI_API_KEY`, `GeminiProvider`) is unaffected.
+
+### Added
+- Full Antigravity CLI (`agy`) support at feature parity: hooks (7-event map sharing Gemini CLI's proven `~/.gemini/settings.json`), dual MCP server registration, and `GEMINI.md`/rules-file context injection.
+- `npx claude-mem antigravity-cli install|status|uninstall` subcommand support.
+
+Verified end-to-end against a real live Antigravity CLI install, including hook firing, MCP tool registration, and context injection.
+
+## [13.9.3] - 2026-07-03
+
+## Changes
+
+- fix: eliminate all 331 error-handling anti-patterns detected by scanner (#3119)
+- chore: repo-wide over-engineering cleanup — ponytail audit wave 1 & 2 (#3120)
+  - Removed dead code, unused dependencies, and unused cmem-sdk client surface
+
+**Full Changelog**: https://github.com/thedotmack/claude-mem/compare/v13.9.2...v13.9.3
+
+## [13.9.2] - 2026-07-01
+
+## Bug Fix
+
+**Removed client-side context truncation from the provider layer.**
+
+The `OpenAICompatibleProvider` applied a sliding-window truncation to conversation history — a hardcoded 20-message cap and a 100k-token "safety" limit layered on top of the model's own context window. In practice it fired on message count alone, dropping conversation messages at ~12k tokens (nowhere near the token limit) and silently corrupting history, mislabeled as "runaway cost" prevention. This broke setups whose real model context window bore no relation to those hardcoded assumptions.
+
+The full conversation history is now sent to the provider, which owns its own context window.
+
+### Removed
+- `OpenAICompatibleProvider.truncateHistory()` and the `requireNonEmptyToTruncate` flag
+- `truncateHistoryForOpenRouter` / `truncateHistoryForGemini` wrappers and their message/token constants
+- `CLAUDE_MEM_{GEMINI,OPENROUTER}_MAX_CONTEXT_MESSAGES` / `_MAX_TOKENS` settings, defaults, and validation
+- Related tests, docs, and installer references
+
+Merged in #3096. Verified: `tsc` clean, 2248 tests passing, build-and-sync clean.
+
+## [13.9.1] - 2026-06-29
+
+## What's Changed
+
+Patch release shipping the platform-source recovery work merged in #3088, plus dependency and Codex hardening.
+
+### Fixes
+- **codex:** load startup context through MCP, with HTTP fallback to the worker
+- **codex:** avoid shell spawning the Codex installer
+- **recovery:** scope memories by platform source
+- **observer:** drop invalid prose and pause on quota
+- **chroma:** prewarm uvx and harden shutdown
+- **deps:** surface dependency-health preflight and degrade gracefully when CLI deps are missing
+- **telemetry:** replace Bun UUIDv5 dependency
+
+### Tests
+- Stabilize session init after the server rename
+- Restore Chroma MCP mock to prevent cross-suite leakage
+
+**Full Changelog**: https://github.com/thedotmack/claude-mem/compare/v13.9.0...v13.9.1
+
+## [13.9.0] - 2026-06-29
+
+## Highlights
+
+### 🚀 New: \`claude-mem/sdk\` (cmem-sdk)
+A fully in-process capture → compress → semantic-search pipeline with **no HTTP worker and no Redis**. Import \`createCmemClient\` from \`claude-mem/sdk\`, point it at Postgres + a running \`uvx chroma-mcp\` + an LLM provider, and call \`capture\`/\`generate\`/\`search\`/\`context\`/session methods directly.
+
+- New reference docs: **CMEM-SDK Reference** under *SDK & Embedding*.
+- Bundle keeps \`pg\`, \`zod\`, \`@modelcontextprotocol/sdk\`, and \`@anthropic-ai/sdk\` external so consumers resolve them against the installed package.
+
+### ♻️ Server runtime rename
+\`server-beta\` → \`server\` across the runtime, with intentional back-compat aliases for existing settings files. Removed inert \`ProviderRegistry\`/\`EventBroadcaster\` boundaries and consolidated the queue resolver.
+
+### 🐛 Fixes
+- \`generate()\`: a provider crash or parse error no longer leaves a job stuck in \`processing\`; it is transitioned to terminal \`failed\` with \`last_error\` recorded before re-throwing.
+- \`search()\`: empty-query path now reports \`chroma: false\` (filter-only, not degraded) instead of falsely claiming a Chroma result.
+- CI: the docker e2e job now calls the renamed \`e2e:server:docker\` script.
+- Docs: corrected \`sdk.mdx\`'s stale parse-error behavior note.
+
+**Full PR:** #3077
+
+## [13.8.0] - 2026-06-21
+
+## Telemetry: observation volume on per-session rollups
+
+Carries generation-side observation volume and type mix on the `observer_turn_rollup` event so cache-value KPIs survive the migration off the legacy per-occurrence `session_compressed` / `context_injected` streams.
+
+### What's new
+- **`observer_turn_rollup`** now sums `observations_created` and the `obs_type_*` family (bugfix / discovery / decision / refactor / other) across every compression turn in a session. Paired with `total_cost_usd`, this makes **cost-per-observation** and **observation-type-by-model** derivable from the rollup alone.
+- **`context_injected_rollup`** carries `total_observations_injected` and `total_tokens_saved_vs_naive` — context-cache value (observations served × cost/obs) is now derivable from the rollup.
+- `scrub.ts` whitelist extended for the new aggregate keys; all values are counts/sums only — never names, prompt text, or raw strings.
+- Public `telemetry.mdx` docs updated to document the new rollup fields.
+
+### Merge notes
+- Merged latest `main` (Ponytail audit, v13.7.1), which removed fabrication tracking; the now-stale `fabrication_count` / `fabricated_count` references were dropped from code and docs accordingly.
+
+Full changes: https://github.com/thedotmack/claude-mem/pull/3017
+
+## [13.7.1] - 2026-06-21
+
+Cleanup + reliability release. No new user-facing features.
+
+## Fixed
+- **Node version floor corrected.** `engines.node` now requires `>=20.12.0` to match the stdlib `util.parseEnv` adopted during the audit. It previously advertised `>=20.0.0`, where `util.parseEnv` is `undefined` — causing silent credential-load failures (and a hard throw in `saveClaudeMemEnv`) on Node 20.0–20.11. Fixed in both the npm package and the generated plugin manifest. (#3021)
+
+## Changed (internal)
+- **Ponytail audit — −10.4k lines** of dead/redundant code removed across 8 slices (worker HTTP routes, agents, session/rate-limit, search pipeline, providers, storage/shared).
+- **Provider refactor.** New `OpenAICompatibleProvider` base class unifies the Gemini and OpenRouter session lifecycle; per-provider behavior preserved via abstract flags (`requireNonEmptyToTruncate`, `forwardEmptyMessageResponse`).
+- **Infra deduplication.** Consolidated `parseRetryAfterMs` (3→1), `waitForExit` (2→1), request-auth helpers (2→1), and `resolveQueue` (2→1); a `CREDENTIAL_KEYS` loop replaces three duplicated copy blocks.
+- **Worker-restart hardening** via a single-spawn gate.
+- **Deterministic dependency closure** for the bundled plugin runtime.
+
+**Full Changelog**: https://github.com/thedotmack/claude-mem/compare/v13.7.0...v13.7.1
+
 ## [13.7.0] - 2026-06-20
 
 ## PostHog telemetry overhaul
