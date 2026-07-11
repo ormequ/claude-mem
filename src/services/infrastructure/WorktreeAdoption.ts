@@ -117,6 +117,25 @@ function listMergedBranches(mainRepo: string): Set<string> {
   );
 }
 
+// `git branch --merged` misses squash-merges (the squashed commit has a fresh
+// SHA, so the branch tip is never an ancestor of HEAD). Standard detection:
+// synthesize a single commit holding the branch's whole tree on top of the
+// merge-base, then ask git cherry whether HEAD already contains an equivalent
+// patch. "-" prefix = already applied → the branch content lives in HEAD.
+// ponytail: commit-tree writes one dangling loose object per branch; harmless,
+// gc-eligible. Covers merge-commit + squash, not rebase-and-merge.
+function isSquashMerged(mainRepo: string, branch: string): boolean {
+  const mergeBase = gitCapture(mainRepo, ['merge-base', 'HEAD', branch]);
+  if (!mergeBase) return false;
+  const tree = gitCapture(mainRepo, ['rev-parse', `${branch}^{tree}`]);
+  if (!tree) return false;
+  const synthetic = gitCapture(mainRepo, ['commit-tree', tree, '-p', mergeBase, '-m', '_']);
+  if (!synthetic) return false;
+  const cherry = gitCapture(mainRepo, ['cherry', 'HEAD', synthetic]);
+  if (cherry === null) return false;
+  return cherry.split('\n').every(line => line === '' || line.startsWith('-'));
+}
+
 export async function adoptMergedWorktrees(opts: {
   repoPath?: string;
   dataDirectory?: string;
@@ -167,7 +186,11 @@ export async function adoptMergedWorktrees(opts: {
     targets = childWorktrees.filter(w => w.branch === opts.onlyBranch);
   } else {
     const merged = listMergedBranches(mainRepo);
-    targets = childWorktrees.filter(w => w.branch !== null && merged.has(w.branch));
+    targets = childWorktrees.filter(
+      w =>
+        w.branch !== null &&
+        (merged.has(w.branch) || isSquashMerged(mainRepo, w.branch))
+    );
   }
 
   result.mergedBranches = targets

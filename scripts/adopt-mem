@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# adopt-mem [worktree-dir] [--all] [--dry-run]
+#
+# Consolidates a git worktree's claude-mem observations into the parent project
+# via the installed claude-mem fork (ormequ). Safe to call on worktree deletion.
+# Idempotent: re-running only adopts newly-created observations (no dups).
+#
+#   adopt-mem                 adopt the current worktree's branch
+#   adopt-mem <dir>           adopt the branch checked out in <dir>
+#   adopt-mem --all           scan EVERY worktree of the repo, adopt all merged
+#                             branches (regular + squash-merged)
+#   adopt-mem --dry-run       report what would be adopted, change nothing
+#
+# Canonical copy lives in the claude-mem repo (scripts/adopt-mem). The
+# ~/.local/bin/adopt-mem entry is a symlink to this file so orca (and any
+# non-zsh caller) can still run it on worktree deletion.
+set -euo pipefail
+
+dir="" dryrun="" all=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dryrun=1 ;;
+    --all) all=1 ;;
+    *) dir="$arg" ;;
+  esac
+done
+
+dir="$(git -C "${dir:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "adopt-mem: not a git worktree: ${dir:-$PWD}" >&2
+  exit 1
+}
+
+# --all: scan every worktree of the repo and adopt all merged (incl. squashed)
+# branches. Otherwise adopt just the current worktree's branch (deletion hook).
+branch=""
+if [[ -z "$all" ]]; then
+  branch="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+    echo "adopt-mem: detached/unknown branch in $dir (use --all to scan every worktree)" >&2
+    exit 1
+  fi
+fi
+
+# Newest ormequ plugin-cache build, falling back to the dev checkout.
+shopt -s nullglob
+builds=("$HOME/.claude/plugins/cache/ormequ/claude-mem"/*/scripts/worker-service.cjs)
+shopt -u nullglob
+ws=""
+if ((${#builds[@]})); then
+  ws="$(ls -t "${builds[@]}" | head -n1)"
+fi
+ws="${ws:-$HOME/Development/tools/claude-mem/plugin/scripts/worker-service.cjs}"
+
+if [[ ! -f "$ws" ]]; then
+  echo "adopt-mem: claude-mem fork worker script not found (ormequ cache / dev checkout)" >&2
+  exit 1
+fi
+
+exec bun "$ws" adopt --cwd "$dir" ${branch:+--branch "$branch"} ${dryrun:+--dry-run}
