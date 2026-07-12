@@ -34,8 +34,10 @@ export function getObservationsByFilePath(
   let projectClause = '';
   if (options?.projects?.length) {
     const placeholders = options.projects.map(() => '?').join(',');
-    projectClause = `AND o.project IN (${placeholders})`;
-    params.push(...options.projects);
+    // Match the merge pointer too, so adopted worktree rows (raw project stays
+    // composite) surface under the parent — mirrors ObservationCompiler/SessionSearch.
+    projectClause = `AND (o.project IN (${placeholders}) OR o.merged_into_project IN (${placeholders}))`;
+    params.push(...options.projects, ...options.projects);
   }
 
   let platformClause = '';

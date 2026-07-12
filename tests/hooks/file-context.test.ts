@@ -146,7 +146,7 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     expect((result.hookSpecificOutput as any).updatedInput).toBeUndefined();
   });
 
-  it('skips entirely when file mtime is newer than newest observation (#1719 still honored)', async () => {
+  it('annotates (not suppresses) observations older than the file mtime (#1719 → annotate)', async () => {
     const stale = Date.now() - 3_600_000;
     fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
       makeObservationsResponse([
@@ -162,8 +162,8 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
       toolInput: { file_path: testFile },
     });
 
-    expect(result.continue).toBe(true);
-    expect(result.hookSpecificOutput).toBeUndefined();
+    expect(result.hookSpecificOutput).toBeDefined();
+    expect(result.hookSpecificOutput!.additionalContext).toContain('may be stale');
   });
 
   it('still injects context when file mtime is older than newest observation', async () => {

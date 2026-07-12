@@ -32,6 +32,11 @@ npm run build-and-sync        # Build, sync to marketplace, restart worker
 
 No need to edit the changelog ever, it's generated automatically.
 
+Project-scoped observation/summary queries must match the adopt merge pointer too
+(`project IN (…) OR merged_into_project IN (…)`), never a bare `project = ?` — else
+adopted worktree rows silently vanish from that path. This applies to inject,
+search, build_corpus, and the `PreToolUse:Read` by-file lookup. See FORK_NOTES.md.
+
 ## Daily Maintenance
 
 Run a daily version check across all package manifests and upgrade every dependency to its latest version — including major version bumps. Staying on the latest is the goal; do not skip majors.

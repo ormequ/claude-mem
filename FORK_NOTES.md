@@ -71,6 +71,17 @@ This fork keeps local claude-mem fixes in source control instead of patching
   (Chroma) search re-dropped adopted rows the vector search had matched. Adopted
   worktree observations are now visible to manual search and corpus builds scoped
   to the parent project, not just to automatic context injection.
+- The `PreToolUse:Read` per-file context path also honors the `adopt` soft-merge
+  pointer, and no longer suppresses on mtime. The `by-file` lookup
+  (`getObservationsByFilePath`) matches `project IN (…) OR merged_into_project IN (…)`
+  (mirroring inject/search), so worktree feature-work merged into the parent is
+  visible when the file is Read from the main checkout — previously it was scoped
+  to the raw `project` slug only and silently missed. The `#1719` mtime gate
+  switched from suppress to annotate: observations older than the file's last edit
+  are surfaced with a `⚠ may be stale` marker instead of being hidden (a merge or
+  checkout bumps the working file's mtime past every worktree observation, which
+  had been silencing exactly the merged feature-work). See
+  `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
 
 ## Upgrade checklist
 
@@ -79,7 +90,7 @@ After rebasing or merging upstream:
 1. Rebuild generated bundles with `bun run build`.
 2. Run `bun run typecheck`.
 3. Run the fork-focused tests:
-   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts`.
+   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts tests/services/sqlite/observations-by-file-merged-scoping.test.ts tests/hooks/file-context.test.ts`.
 4. Run `claude plugin validate .`.
 5. Install from this checkout, not from a patched cache directory.
 6. Smoke test:

@@ -56,17 +56,21 @@ function deduplicateObservations(
   targetPath: string,
   displayLimit: number
 ): ObservationRow[] {
-  const seenSessions = new Set<string>();
-  const dedupedBySession: ObservationRow[] = [];
+  // Content-dedup, NOT session-dedup: collapsing by memory_session_id kept only
+  // the newest observation per session (the blandest "verification" wrap-up) and
+  // dropped the decision-carrying bugfix/root-cause siblings. Dedup by normalized
+  // title instead — collapse only exact re-captures, keep distinct observations.
+  const seenTitles = new Set<string>();
+  const deduped: ObservationRow[] = [];
   for (const obs of observations) {
-    const sessionKey = obs.memory_session_id ?? `no-session-${obs.id}`;
-    if (!seenSessions.has(sessionKey)) {
-      seenSessions.add(sessionKey);
-      dedupedBySession.push(obs);
+    const titleKey = (obs.title ?? '').toLowerCase().replace(/\s+/g, ' ').trim() || `no-title-${obs.id}`;
+    if (!seenTitles.has(titleKey)) {
+      seenTitles.add(titleKey);
+      deduped.push(obs);
     }
   }
 
-  const scored = dedupedBySession.map(obs => {
+  const scored = deduped.map(obs => {
     const filesRead = parseJsonArray(obs.files_read);
     const filesModified = parseJsonArray(obs.files_modified);
     const totalFiles = filesRead.length + filesModified.length;
@@ -88,7 +92,8 @@ function deduplicateObservations(
 
 function formatFileTimeline(
   observations: ObservationRow[],
-  filePath: string
+  filePath: string,
+  fileMtimeMs: number = 0
 ): string {
   const safePath = filePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   const byDay = new Map<string, ObservationRow[]>();
@@ -129,7 +134,8 @@ function formatFileTimeline(
       const title = (obs.title || 'Untitled').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
       const icon = TYPE_ICONS[obs.type] || '\u2753';
       const time = compactTime(formatTime(obs.created_at_epoch));
-      lines.push(`${obs.id} ${time} ${icon} ${title}`);
+      const staleSuffix = (fileMtimeMs > 0 && obs.created_at_epoch <= fileMtimeMs) ? ' \u26a0 may be stale (file edited since)' : '';
+      lines.push(`${obs.id} ${time} ${icon} ${title}${staleSuffix}`);
     }
   }
 
@@ -243,22 +249,13 @@ async function buildFileContextTimeline(input: NormalizedHookInput, filePath: st
     return null;
   }
 
-  if (fileMtimeMs > 0) {
-    const newestObservationMs = Math.max(...data.observations.map(o => o.created_at_epoch));
-    if (fileMtimeMs >= newestObservationMs) {
-      logger.debug('HOOK', 'File modified since last observation, skipping context injection', {
-        filePath: relativePath,
-        fileMtimeMs,
-        newestObservationMs,
-      });
-      return null;
-    }
-  }
-
+  // #1719 mtime gate: annotate, don't suppress. A merge/checkout bumps mtime past
+  // every worktree observation, so suppressing here silenced merged feature-work.
+  // Observations older than the file's last edit are now flagged stale in-place.
   const dedupedObservations = deduplicateObservations(data.observations, relativePath, DISPLAY_LIMIT);
   if (dedupedObservations.length === 0) {
     return null;
   }
 
-  return formatFileTimeline(dedupedObservations, filePath);
+  return formatFileTimeline(dedupedObservations, filePath, fileMtimeMs);
 }
