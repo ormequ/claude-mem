@@ -34,7 +34,6 @@ import {
 import { extractEresolveBlock, isEresolve, runNpmStrict } from '../install/npm-install-helper.js';
 import {
   filterClaudeMemSkillsDirectory,
-  shouldInstallAllClaudeMemSkills,
 } from '../../services/integrations/SkillSelection.js';
 
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
@@ -682,9 +681,9 @@ function copyPluginToMarketplace(): void {
   const skillsDirectory = join(marketplaceDir, 'plugin', 'skills');
   const result = filterClaudeMemSkillsDirectory(skillsDirectory);
   if (result.filtered && result.removed.length > 0) {
-    log.info(`Keeping ${result.kept.length} default skills (${result.removed.length} extras disabled; set CLAUDE_MEM_INSTALL_ALL_SKILLS=true to keep all).`);
-  } else if (shouldInstallAllClaudeMemSkills()) {
-    log.info('Keeping all bundled skills (CLAUDE_MEM_INSTALL_ALL_SKILLS=true).');
+    log.info(`Keeping ${result.kept.length} ${result.set} skills (${result.removed.length} disabled; set CLAUDE_MEM_SKILL_SET=default|compact|full to change).`);
+  } else if (result.set === 'full') {
+    log.info('Keeping all bundled skills (CLAUDE_MEM_SKILL_SET=full).');
   }
 }
 

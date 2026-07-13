@@ -5,20 +5,32 @@ const { existsSync, readFileSync, readdirSync, rmSync, statSync, copyFileSync } 
 const path = require('path');
 const os = require('os');
 
-// Keep in sync with DEFAULT_CLAUDE_MEM_SKILLS in src/services/integrations/SkillSelection.ts
-const DEFAULT_CLAUDE_MEM_SKILLS = new Set([
+// Keep in sync with SkillSelection.ts (DEFAULT_CLAUDE_MEM_SKILLS / COMPACT_CLAUDE_MEM_SKILLS).
+const DEFAULT_CLAUDE_MEM_SKILLS = [
   'mem-search', 'smart-explore', 'learn-codebase', 'how-it-works',
   'timeline-report', 'weekly-digests', 'standup', 'pathfinder',
-]);
+  'knowledge-agent',
+];
+const COMPACT_CLAUDE_MEM_SKILLS = ['knowledge-agent', 'mem-search', 'learn-codebase'];
+
+// Mirror resolveClaudeMemSkillSet() in SkillSelection.ts.
+function resolveSkillSet() {
+  const explicit = process.env.CLAUDE_MEM_SKILL_SET?.trim().toLowerCase();
+  if (explicit === 'default' || explicit === 'compact' || explicit === 'full') return explicit;
+  if (process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS?.trim().toLowerCase() === 'true') return 'full';
+  return 'default';
+}
 
 // Mirror `npx claude-mem install` skill filtering: dev sync copies plugin/ wholesale,
 // so without this the marketplace/cache get all skills (e.g. /design-is) regardless.
 function filterSkills(skillsDir) {
-  if (process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS?.trim().toLowerCase() === 'true') return;
+  const set = resolveSkillSet();
+  if (set === 'full') return;
   if (!existsSync(skillsDir)) return;
+  const allowed = new Set(set === 'compact' ? COMPACT_CLAUDE_MEM_SKILLS : DEFAULT_CLAUDE_MEM_SKILLS);
   for (const entry of readdirSync(skillsDir)) {
     const entryPath = path.join(skillsDir, entry);
-    if (statSync(entryPath).isDirectory() && !DEFAULT_CLAUDE_MEM_SKILLS.has(entry)) {
+    if (statSync(entryPath).isDirectory() && !allowed.has(entry)) {
       rmSync(entryPath, { recursive: true, force: true });
     }
   }
@@ -163,34 +175,47 @@ try {
   );
 
   const version = getPluginVersion();
-  // Claude Code normalizes semver build-metadata '+' to '-' in the cache dir name
-  // (see installPath in ~/.claude/plugins/installed_plugins.json). Match it or we
-  // mirror into a phantom dir Claude never loads.
-  const CACHE_VERSION_PATH = path.join(CACHE_BASE_PATH, version.replace(/\+/g, '-'));
+  // Claude Code normalizes semver build-metadata '+' to '-' in the cache dir name,
+  // so the canonical loaded dir uses '-'. But installed_plugins.json has been seen
+  // in the wild with the raw '+' installPath (cache-shadowing gotcha) — the '+' dir
+  // is then the one Claude actually loads. Target the normalized dir always, plus
+  // the raw '+' dir when it already exists on disk (i.e. some install points at it).
+  // We don't create a '+' dir that doesn't exist, to avoid minting phantoms.
+  const cacheVersionNames = new Set([version.replace(/\+/g, '-')]);
+  if (existsSync(path.join(CACHE_BASE_PATH, version))) {
+    cacheVersionNames.add(version);
+  }
 
   const pluginDir = path.join(rootDir, 'plugin');
   const pluginGitignoreExcludes = getGitignoreExcludes(pluginDir);
-
-  console.log(`Syncing to cache folder (version ${version})...`);
-  execSync(
-    `rsync -av --delete --exclude=.git ${pluginGitignoreExcludes} plugin/ "${CACHE_VERSION_PATH}/"`,
-    { stdio: 'inherit' }
-  );
-
-  console.log(`Running bun install in cache folder (version ${version})...`);
-  execSync(`bun install`, { cwd: CACHE_VERSION_PATH, stdio: 'inherit' });
-
-  filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
-  filterSkills(path.join(CACHE_VERSION_PATH, 'skills'));
-
   // rsync's gitignore excludes drop tracked-but-ignored files. plugin/.mcp.json is
   // force-tracked but matched by the root .gitignore `.mcp.json` line, so it never
   // reaches the copy — and without it Claude Code doesn't register the MCP server
   // when the marketplace points at this copy. Restore it explicitly.
   const mcpSrc = path.join(rootDir, 'plugin', '.mcp.json');
+
+  for (const cacheName of cacheVersionNames) {
+    const cachePath = path.join(CACHE_BASE_PATH, cacheName);
+
+    console.log(`Syncing to cache folder (${cacheName})...`);
+    execSync(
+      `rsync -av --delete --exclude=.git ${pluginGitignoreExcludes} plugin/ "${cachePath}/"`,
+      { stdio: 'inherit' }
+    );
+
+    console.log(`Running bun install in cache folder (${cacheName})...`);
+    execSync(`bun install`, { cwd: cachePath, stdio: 'inherit' });
+
+    filterSkills(path.join(cachePath, 'skills'));
+
+    if (existsSync(mcpSrc)) {
+      copyFileSync(mcpSrc, path.join(cachePath, '.mcp.json'));
+    }
+  }
+
+  filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
   if (existsSync(mcpSrc)) {
     copyFileSync(mcpSrc, path.join(INSTALLED_PATH, 'plugin', '.mcp.json'));
-    copyFileSync(mcpSrc, path.join(CACHE_VERSION_PATH, '.mcp.json'));
   }
 
   console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');

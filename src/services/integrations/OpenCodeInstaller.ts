@@ -6,8 +6,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlin
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
 import {
-  DEFAULT_CLAUDE_MEM_SKILLS,
-  shouldInstallAllClaudeMemSkills,
+  claudeMemSkillAllowlist,
+  resolveClaudeMemSkillSet,
 } from './SkillSelection.js';
 import { getWorkerHost, getWorkerPort } from '../../shared/worker-utils.js';
 
@@ -164,9 +164,8 @@ export function findBundledSkillsPath(): string | null {
 
 function installSelectedOpenCodeSkills(sourcePath: string, destinationPath: string): number {
   let installedCount = 0;
-  const skillNames = shouldInstallAllClaudeMemSkills()
-    ? null
-    : [...DEFAULT_CLAUDE_MEM_SKILLS];
+  const allowlist = claudeMemSkillAllowlist();
+  const skillNames = allowlist === null ? null : [...allowlist];
 
   if (skillNames === null) {
     cpSync(sourcePath, destinationPath, { recursive: true });
@@ -203,7 +202,8 @@ export function installOpenCodeSkills(): number {
     mkdirSync(destinationPath, { recursive: true });
     const installedCount = installSelectedOpenCodeSkills(skillsSourcePath, destinationPath);
 
-    const mode = shouldInstallAllClaudeMemSkills() ? 'all bundled skills' : `${installedCount} default skills`;
+    const skillSet = resolveClaudeMemSkillSet();
+    const mode = skillSet === 'full' ? 'all bundled skills' : `${installedCount} ${skillSet} skills`;
     console.log(`  Skills installed to: ${destinationPath} (${mode})`);
     logger.info('OPENCODE', 'Skills installed', {
       source: skillsSourcePath,

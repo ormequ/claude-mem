@@ -18,18 +18,21 @@ This fork keeps local claude-mem fixes in source control instead of patching
   - `CLAUDE_MEM_TELEMETRY=1` enables anonymous telemetry.
   - `CLAUDE_MEM_TELEMETRY=0` and `DO_NOT_TRACK=1` keep it off.
   - The installer prompt defaults to no.
-- The default installed skill set is intentionally compact:
-  - `mem-search`
-  - `smart-explore`
-  - `learn-codebase`
-  - `how-it-works`
-  - `timeline-report`
-  - `weekly-digests`
-  - `standup`
-  - `pathfinder`
-- Extra bundled skills stay available for development, but are not installed by
-  default. Set `CLAUDE_MEM_INSTALL_ALL_SKILLS=true` during install to keep every
-  bundled skill.
+- The installed skill set has three modes, chosen via `CLAUDE_MEM_SKILL_SET`
+  (`default` | `compact` | `full`; unset → `default`). Extra bundled skills stay
+  available in source for development but are removed from the installed skills
+  directory unless the mode keeps them.
+  - `default` — core + reports, plus `knowledge-agent`:
+    - `mem-search`, `smart-explore`, `learn-codebase`, `how-it-works`,
+      `timeline-report`, `weekly-digests`, `standup`, `pathfinder`,
+      `knowledge-agent`
+  - `compact` — essentials only: `knowledge-agent`, `mem-search`,
+    `learn-codebase`
+  - `full` — every bundled skill (no filtering)
+- Legacy `CLAUDE_MEM_INSTALL_ALL_SKILLS=true` still maps to `full`;
+  `CLAUDE_MEM_SKILL_SET` takes precedence when both are set.
+- `knowledge-agent` is included by default because the fork enhances its corpus
+  Q&A path (`CLAUDE_MEM_OPENROUTER_QA_MODEL`, below).
 
 ## Local fixes carried by the fork
 
