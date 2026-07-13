@@ -176,3 +176,32 @@ ranking machinery).
 
 Re-run order once content-dedup deploys: the two killer smoke-reads first
 (1 minute, lead session), then the full 16-file qualitative pass.
+
+---
+
+## Final re-evaluation, 2026-07-12 (post content-dedup deploy)
+
+Killer smoke-reads: **both PASS** (#25165/#25175 visible on AbsencesImporter.php;
+#24717 visible on Gallery.vue, reinforced by 5 sibling entries of the same saga).
+
+Full 16-file qualitative re-run (fresh judge, same files/rubric as baseline):
+**0/16 → 5/16 load-bearing (score-2)** — titles alone, no get_observations
+fetch, delivered decision-relevant value in 31% of files (e.g. explains why
+`only:["errors","flash"]` in Bitrix24ImportForm submit is deliberate; explains
+the prefill-banner `v-if` condition; the EMP-11 line — genuinely outdated —
+was correctly hedged by the stale marker instead of stated as fact). Silence
+on no-history files intact; the misleading “fails to autoload” claim no longer
+surfaces. **Verdict: the hook STAYS.**
+
+Two data-backed tweaks remain for the owner (non-blocking):
+
+1. **Intent-ordering is now justified by measurement** (the earlier “defer the
+   boost” position is withdrawn): valuable lines sit at chronological
+   positions 8–10 of 15, diluted by commit-diary chronicle (~half of all
+   lines); #24717 sat at position 10/15. Surfacing fix/decision-tagged entries
+   above informational narration fixes this without any fetch.
+2. **Stale marker is wallpaper at ~90%+ coverage** — mtime bumps on every
+   merge/checkout mark nearly everything. Replace the trigger with a content
+   check (git blob hash at observation time vs now), which shrinks the marker
+   to “this file's content actually changed” and restores its signal (the
+   previously-discussed step-2 idea; region-aware tracking is not required).
