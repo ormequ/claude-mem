@@ -41,7 +41,7 @@ function formatDate(epoch: number): string {
   return date.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-interface ObservationRow {
+export interface ObservationRow {
   id: number;
   memory_session_id: string;
   title: string | null;
@@ -49,9 +49,17 @@ interface ObservationRow {
   created_at_epoch: number;
   files_read: string | null;
   files_modified: string | null;
+  concepts: string | null;
 }
 
-function deduplicateObservations(
+// FORK: concepts the observer tags at capture time that mark decision-carrying
+// content. Additive score boost ONLY — never a sort key, never a filter:
+// type/priority-based selection is simulation-proven to bury the
+// "deliberate revert" class (#24717, type=change).
+const BOOST_CONCEPTS = new Set(['decision', 'gotcha', 'trade-off', 'problem-solution']);
+const CONCEPT_BOOST = 2;
+
+export function deduplicateObservations(
   observations: ObservationRow[],
   targetPath: string,
   displayLimit: number
@@ -81,6 +89,11 @@ function deduplicateObservations(
     if (inModified) specificityScore += 2;
     if (totalFiles <= 3) specificityScore += 2;
     else if (totalFiles <= 8) specificityScore += 1;
+
+    // FORK: additive only, applied after the upstream specificity score.
+    if (parseJsonArray(obs.concepts).some(c => BOOST_CONCEPTS.has(c))) {
+      specificityScore += CONCEPT_BOOST;
+    }
 
     return { obs, specificityScore };
   });
