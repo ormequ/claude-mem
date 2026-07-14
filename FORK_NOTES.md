@@ -40,10 +40,6 @@ This fork keeps local claude-mem fixes in source control instead of patching
   `narrative` as a legacy alias.
 - MCP `projectId` handling accepts useful aliases such as `MKS` and ignores raw
   UUID project IDs instead of using them as project aliases.
-- Smart file tools use the `tree-sitter-cli@0.26.x` query shape:
-  `tree-sitter query --grammar-path <grammarPath> <queryPath> <files...>`.
-- `smart_search` returns folded file views for file path/content matches even
-  when no symbol name matched.
 - `query_corpus` uses an OpenRouter-compatible `/chat/completions` request when
   `CLAUDE_MEM_PROVIDER=openrouter`, avoiding Claude Code SDK/OAuth.
 - Worker launch behavior is fixed so normal installs start the worker instead
@@ -57,15 +53,6 @@ This fork keeps local claude-mem fixes in source control instead of patching
   or a `$TIER:smart` alias) is used for answers, falling back to
   `CLAUDE_MEM_OPENROUTER_MODEL` when unset. Keeps bulk observation/summary on the
   cheap model while corpus answers use a stronger one (fewer hallucinations).
-- Smart file tools support Vue/Svelte single-file components: the `<script>`
-  body is parsed under its own grammar (TS/JS) with the surrounding markup
-  blanked out so line numbers stay aligned. No SFC grammar needed.
-- tree-sitter binary resolution is resilient: a 0-byte placeholder (left when the
-  postinstall download is skipped/blocked) is ignored, and a working
-  `tree-sitter` on PATH or a common location (`/opt/homebrew/bin`, cargo) is
-  preferred over re-downloading from the GitHub release CDN (which some networks
-  block). Install the CLI once with `brew install tree-sitter-cli` (0.26.x) if the
-  bundled download is unavailable.
 - `search` / `build_corpus` honor the `adopt` soft-merge pointer end to end:
   both the FTS/no-query SQLite filter (`buildFilterClause`) and the
   semantic-result ID hydration (`getObservationsByIds` /
@@ -85,6 +72,28 @@ This fork keeps local claude-mem fixes in source control instead of patching
   checkout bumps the working file's mtime past every worktree observation, which
   had been silencing exactly the merged feature-work). See
   `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
+
+## Dropped: smart-file-read / tree-sitter fork work (2026-07-14)
+
+The fork no longer carries any smart-file-read delta. `codegraph` replaced
+tree-sitter for code structure, so these fixes were abandoned rather than
+re-applied:
+
+- the `tree-sitter-cli@0.26.x` `--grammar-path` query shape,
+- resilient binary resolution (0-byte placeholder ignored, PATH/homebrew/cargo
+  preferred over the release CDN),
+- Vue/Svelte SFC `<script>` parsing,
+- `smart_search` folded file views — this one is upstream behavior now.
+
+State as of the v13.11.0 merge: `src/services/smart-file-read/parser.ts` and
+`search.ts` are byte-identical to `origin/main`. The fork test that covered the
+above (`tests/services/smart-file-read-fork-fixes.test.ts`) was deleted — it had
+been failing at import (`ensureTreeSitterCliBinary` no longer exists), and all
+its remaining cases failed too because tree-sitter parsing returns no symbols
+here.
+
+Do not re-add these on the next upstream merge. Use `codegraph explore` for
+structure; the `PreToolUse:Read` header points there, not at `smart_outline`.
 
 ## Upstream baseline: `PreToolUse:Read` behavior (verified 2026-07-14)
 
@@ -129,8 +138,6 @@ After rebasing or merging upstream:
 6. Smoke test:
    - `observation_add` with `projectId: "MKS"`
    - `memory_search` with a fresh marker
-   - `smart_outline` on a Go file
-   - `smart_search grpcutil`
    - `query_corpus mks-smoke-test` with OpenRouter and no Claude OAuth
 
 Do not treat edits under `~/.claude/plugins/cache` as durable fixes. Port them

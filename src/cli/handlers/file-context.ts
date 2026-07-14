@@ -124,7 +124,7 @@ function formatFileTimeline(
     `Current: ${currentDate} ${currentTime} ${currentTimezone}`,
     `This file has prior observations — supplementary context follows. The Read result below is the full requested section.`,
     `- **Need details on a past observation?** get_observations([IDs]) — ~300 tokens each.`,
-    `- **Need a structural map first?** smart_outline("${safePath}") — line numbers only, cheaper than re-reading.`,
+    `- **Need a structural map first?** codegraph explore "${safePath}" — symbols and call paths, cheaper than re-reading.`,
   ];
 
   for (const [day, dayObservations] of sortedDays) {
