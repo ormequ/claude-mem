@@ -56,6 +56,7 @@ import {
 } from './infrastructure/HealthMonitor.js';
 import { performGracefulShutdown } from './infrastructure/GracefulShutdown.js';
 import { adoptMergedWorktrees, adoptMergedWorktreesForAllKnownRepos } from './infrastructure/WorktreeAdoption.js';
+import { startPeriodicAdoption } from './infrastructure/AdoptionScheduler.js';
 
 import { Server } from './server/Server.js';
 import { BetterAuthRoutes } from '../server/auth/BetterAuthRoutes.js';
@@ -490,6 +491,10 @@ export class WorkerService implements WorkerRef {
       }).catch(err => {
         logger.error('WORKER', 'Worktree adoption failed (background)', {}, err instanceof Error ? err : new Error(String(err)));
       });
+
+      // FORK: the worker lives for weeks, so a branch merged between restarts
+      // stayed invisible to parent-project queries until someone ran `adopt`.
+      startPeriodicAdoption();
 
       const chromaEnabled = settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
       if (chromaEnabled) {
