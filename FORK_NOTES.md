@@ -86,6 +86,36 @@ This fork keeps local claude-mem fixes in source control instead of patching
   had been silencing exactly the merged feature-work). See
   `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
 
+## Upstream baseline: `PreToolUse:Read` behavior (verified 2026-07-14)
+
+Recorded to stop a recurring misread (the public doc is stale). `origin/main` is
+treated as the upstream mirror here — it carries 0 fork commits (all `main`
+history is authored upstream); fork changes live on `fork-fixes`.
+
+- **Upstream ships `allow`, not `deny`.** On `origin/main`,
+  `src/cli/handlers/file-context.ts` returns `permissionDecision: 'allow'`: it
+  lets the full Read through and injects the observation timeline as
+  `additionalContext` ("… The Read result below is the full requested section.").
+  It does **not** block/substitute reads.
+- **Upstream tried deny and rejected it — twice, for independent reasons:**
+  - `c8076339` — deny on first read, allow on re-read (in-memory session gate,
+    4h TTL). Abandoned by…
+  - `455aeaf6` — allow-on-retry silently bypassed the timeline on the second
+    read, hiding freshly-created observations → switched to deny-every-read.
+    Abandoned by…
+  - `d0676aa0` ("file-read gate **allows Edit**") — deny broke the harness
+    Read-before-Edit invariant (a denied Read never registers, so `Edit`/`Write`
+    fail with "must Read first"). Switched deny→allow (initially `limit:1`, later
+    the full read on current `main`). `codegraph`/MCP output does not satisfy the
+    invariant either — only the built-in Read tool registers a file.
+  So deny is settled-rejected upstream: (a) hides fresh observations on retry,
+  (b) breaks Edit. Re-adopting it re-introduces both.
+- ⚠ **`docs/public/file-read-gate.mdx` is STALE.** It still documents the
+  abandoned deny/block behavior ("blocks the read and instead shows a compact
+  timeline"). Do not treat it as current; the code is allow-mode.
+- The fork's only delta on this hook is the `#1719` mtime annotate flag and the
+  `merged_into_project` by-file scoping (above) — not the allow/deny decision.
+
 ## Upgrade checklist
 
 After rebasing or merging upstream:
