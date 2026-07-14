@@ -125,6 +125,25 @@ history is authored upstream); fork changes live on `fork-fixes`.
 - The fork's only delta on this hook is the `#1719` mtime annotate flag and the
   `merged_into_project` by-file scoping (above) — not the allow/deny decision.
 
+## Runbook: Chroma corruption recovery
+
+Symptom: chroma-mcp subprocess death-spiral — repeated segfaults or `-32001`
+errors on every vector call; transport retry and watermark backfill do not
+recover because the index files themselves are corrupted (nothing detects
+file-level corruption).
+
+Fix (safe — Chroma is a derived cache; SQLite is the source of truth, nothing
+is lost):
+
+1. Stop the worker.
+2. Delete `~/.claude-mem/chroma/` and the Chroma sync-state file
+   (`sync-state.json` under `~/.claude-mem/`).
+3. Restart the worker — the startup "smart backfill" rebuilds the vector index
+   from SQLite. Search degrades to FTS-only until the rebuild finishes.
+
+If this recurs a third time, automate it (subprocess-death counter →
+quarantine + rebuild); until then the manual ritual is cheaper than the code.
+
 ## Upgrade checklist
 
 After rebasing or merging upstream:
