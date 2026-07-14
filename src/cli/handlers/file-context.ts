@@ -108,7 +108,6 @@ function formatFileTimeline(
   filePath: string,
   fileMtimeMs: number = 0
 ): string {
-  const safePath = filePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   const byDay = new Map<string, ObservationRow[]>();
   for (const obs of observations) {
     const day = formatDate(obs.created_at_epoch);
@@ -135,9 +134,7 @@ function formatFileTimeline(
 
   const lines: string[] = [
     `Current: ${currentDate} ${currentTime} ${currentTimezone}`,
-    `This file has prior observations — supplementary context follows. The Read result below is the full requested section.`,
-    `- **Need details on a past observation?** get_observations([IDs]) — ~300 tokens each.`,
-    `- **Need a structural map first?** codegraph explore "${safePath}" — symbols and call paths, cheaper than re-reading.`,
+    `Prior observations for this file (the Read result below is the full requested section). Details: get_observations([IDs]) — ~300 tokens each.`,
   ];
 
   for (const [day, dayObservations] of sortedDays) {

@@ -125,7 +125,7 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     });
 
     expect(result.hookSpecificOutput).toBeDefined();
-    expect(result.hookSpecificOutput!.additionalContext).toContain('prior observations');
+    expect(result.hookSpecificOutput!.additionalContext).toContain('Prior observations for this file');
     expect((result.hookSpecificOutput as any).updatedInput).toBeUndefined();
   });
 
@@ -183,7 +183,7 @@ describe('fileContextHandler — #2094 (no Read mutation)', () => {
     });
 
     expect(result.hookSpecificOutput).toBeDefined();
-    expect(result.hookSpecificOutput!.additionalContext).toContain('prior observations');
+    expect(result.hookSpecificOutput!.additionalContext).toContain('Prior observations for this file');
     expect((result.hookSpecificOutput as any).updatedInput).toBeUndefined();
   });
 
