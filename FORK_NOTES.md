@@ -72,6 +72,40 @@ This fork keeps local claude-mem fixes in source control instead of patching
   checkout bumps the working file's mtime past every worktree observation, which
   had been silencing exactly the merged feature-work). See
   `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
+- `PreToolUse:Read` ranking: `deduplicateObservations` in
+  `src/cli/handlers/file-context.ts` gets an **additive** `+2` boost for
+  decision-carrying concepts (`decision`, `gotcha`, `trade-off`,
+  `problem-solution`), applied after the upstream specificity score. Type is
+  never a sort key or filter — simulation-verified to bury the deliberate-revert
+  class (#24717, `type=change`). Display cap stays 15.
+  The delta is **deliberately inline, not extracted**: the function and its
+  whole scoring block are upstream code (`origin/main` carries it). Extracting
+  it to a fork-owned module would take permanent ownership of an upstream
+  function — every upstream touch becomes a modify/delete conflict to hand-port,
+  and upstream ranking improvements get silently shadowed. Extraction pays off
+  only for fork-authored logic (see `file-staleness.ts` below). The fork also
+  exports `deduplicateObservations` + `ObservationRow` so the fork test can
+  import them.
+- The `⚠ may be stale` marker is keyed to the file's last *content* change
+  (`git log -1 --format=%ct -- <path>`, mtime fallback for dirty/untracked/
+  non-git and any git failure) instead of raw mtime — a merge/checkout no longer
+  marks every entry stale (`src/cli/handlers/file-staleness.ts`, fork-owned:
+  upstream has no counterpart). ~20ms warm; runs only when the by-file query
+  returned observations, not on every Read.
+- The read-hook injection header is two lines: `Current:` plus one line folding
+  the `get_observations` hint. The per-injection `codegraph`/`smart_outline`
+  hint is gone — transcript audit showed such hints are almost never acted on,
+  and the global CLAUDE.md already mandates codegraph-first in indexed repos.
+- Merged-worktree adoption re-runs hourly in the worker
+  (`src/services/infrastructure/AdoptionScheduler.ts`, fork-owned), not just at
+  startup: the worker lives for weeks, so a branch merged between restarts was
+  invisible to project-scoped queries until someone ran `adopt`. Skips ticks
+  while a run is in flight, survives runner failures, unrefs the timer.
+- `CLAUDE_MEM_SMART_TOOLS=false|0` removes `smart_search`/`smart_unfold`/
+  `smart_outline` from MCP registration (both ListTools and CallTool) and drops
+  `smart-explore` from the default skill set. Default: enabled (upstream
+  parity). `compact` never shipped smart-explore; `full` stays unfiltered by
+  contract.
 
 ## Dropped: smart-file-read / tree-sitter fork work (2026-07-14)
 
@@ -110,7 +144,9 @@ Note the repo-root `package.json` still carries the tree-sitter dev deps, and
 if node_modules ever needs rebuilding.
 
 Do not re-add these on the next upstream merge. Use `codegraph explore` for
-structure; the `PreToolUse:Read` header points there, not at `smart_outline`.
+structure. The `PreToolUse:Read` header no longer hints at any structure tool
+(it briefly pointed at `codegraph` in `a1e7180f`); `CLAUDE_MEM_SMART_TOOLS=false`
+removes the `smart_*` tools from MCP registration entirely.
 
 ## Upstream baseline: `PreToolUse:Read` behavior (verified 2026-07-14)
 
@@ -139,8 +175,9 @@ history is authored upstream); fork changes live on `fork-fixes`.
 - ⚠ **`docs/public/file-read-gate.mdx` is STALE.** It still documents the
   abandoned deny/block behavior ("blocks the read and instead shows a compact
   timeline"). Do not treat it as current; the code is allow-mode.
-- The fork's only delta on this hook is the `#1719` mtime annotate flag and the
-  `merged_into_project` by-file scoping (above) — not the allow/deny decision.
+- The fork's deltas on this hook (mtime→annotate, git-content staleness,
+  `merged_into_project` by-file scoping, concepts boost, header trim — all
+  above) never touch the allow/deny decision. Keep it that way.
 
 ## Runbook: Chroma corruption recovery
 
@@ -168,7 +205,7 @@ After rebasing or merging upstream:
 1. Rebuild generated bundles with `bun run build`.
 2. Run `bun run typecheck`.
 3. Run the fork-focused tests:
-   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts tests/services/sqlite/observations-by-file-merged-scoping.test.ts tests/hooks/file-context.test.ts`.
+   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts tests/services/sqlite/observations-by-file-merged-scoping.test.ts tests/hooks/file-context.test.ts tests/hooks/file-context-ranking.test.ts tests/hooks/file-staleness.test.ts tests/services/infrastructure/adoption-scheduler.test.ts tests/shared/smart-tools.test.ts`.
 4. Run `claude plugin validate .`.
 5. Install from this checkout, not from a patched cache directory.
 6. Smoke test:
