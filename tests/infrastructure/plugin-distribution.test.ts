@@ -278,7 +278,6 @@ describe('Plugin Distribution - Build Script Verification', () => {
     const activeHelperPaths = [
       'src/npx-cli/utils/paths.ts',
       'scripts/sync-marketplace.cjs',
-      'scripts/sync-to-marketplace.sh',
       'Dockerfile.test-installer',
     ];
 
