@@ -6,6 +6,7 @@ import type { EventHandler, NormalizedHookInput, HookResult } from '../types.js'
 import { executeWithWorkerFallback, isWorkerFallback } from '../../shared/worker-utils.js';
 import { logger } from '../../utils/logger.js';
 import { parseJsonArray } from '../../shared/timeline-formatting.js';
+import { getContentStaleThresholdMs } from './file-staleness.js';
 import { statSync } from 'fs';
 import path from 'path';
 import { shouldTrackProject } from '../../shared/should-track-project.js';
@@ -106,7 +107,7 @@ export function deduplicateObservations(
 function formatFileTimeline(
   observations: ObservationRow[],
   filePath: string,
-  fileMtimeMs: number = 0
+  staleThresholdMs: number = 0
 ): string {
   const byDay = new Map<string, ObservationRow[]>();
   for (const obs of observations) {
@@ -144,7 +145,7 @@ function formatFileTimeline(
       const title = (obs.title || 'Untitled').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
       const icon = TYPE_ICONS[obs.type] || '\u2753';
       const time = compactTime(formatTime(obs.created_at_epoch));
-      const staleSuffix = (fileMtimeMs > 0 && obs.created_at_epoch <= fileMtimeMs) ? ' \u26a0 may be stale (file edited since)' : '';
+      const staleSuffix = (staleThresholdMs > 0 && obs.created_at_epoch <= staleThresholdMs) ? ' \u26a0 may be stale (file edited since)' : '';
       lines.push(`${obs.id} ${time} ${icon} ${title}${staleSuffix}`);
     }
   }
@@ -267,5 +268,10 @@ async function buildFileContextTimeline(input: NormalizedHookInput, filePath: st
     return null;
   }
 
-  return formatFileTimeline(dedupedObservations, filePath, fileMtimeMs);
+  // FORK: mtime alone marks ~everything stale after a merge/checkout (it bumps
+  // even when content is identical). Key the marker to the last content change.
+  const staleThresholdMs = fileMtimeMs > 0
+    ? getContentStaleThresholdMs(absolutePath, cwd, fileMtimeMs)
+    : 0;
+  return formatFileTimeline(dedupedObservations, filePath, staleThresholdMs);
 }
