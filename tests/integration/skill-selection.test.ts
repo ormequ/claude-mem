@@ -22,10 +22,15 @@ function writeSkill(root: string, name: string): void {
 describe('Skill selection', () => {
   const originalAllEnv = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
   const originalSetEnv = process.env.CLAUDE_MEM_SKILL_SET;
+  const originalSmartToolsEnv = process.env.CLAUDE_MEM_SMART_TOOLS;
 
   beforeEach(() => {
     delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
     delete process.env.CLAUDE_MEM_SKILL_SET;
+    // The default allowlist is smart-tools-dependent, so a real
+    // CLAUDE_MEM_SMART_TOOLS=false in the dev environment would otherwise
+    // leak into every default-set assertion below.
+    delete process.env.CLAUDE_MEM_SMART_TOOLS;
     rmSync(tempDir, { recursive: true, force: true });
     mkdirSync(tempDir, { recursive: true });
   });
@@ -33,6 +38,7 @@ describe('Skill selection', () => {
   afterEach(() => {
     process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = originalAllEnv;
     process.env.CLAUDE_MEM_SKILL_SET = originalSetEnv;
+    process.env.CLAUDE_MEM_SMART_TOOLS = originalSmartToolsEnv;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -48,6 +54,20 @@ describe('Skill selection', () => {
       'pathfinder',
       'knowledge-agent',
     ]);
+  });
+
+  it('drops smart-explore from the default set when smart tools are disabled', () => {
+    process.env.CLAUDE_MEM_SMART_TOOLS = 'false';
+    delete process.env.CLAUDE_MEM_SKILL_SET;
+    const allowlist = claudeMemSkillAllowlist();
+    expect(allowlist).not.toBeNull();
+    expect(allowlist).not.toContain('smart-explore');
+    expect(allowlist).toContain('mem-search');
+    delete process.env.CLAUDE_MEM_SMART_TOOLS;
+  });
+
+  it('keeps smart-explore in the default set when smart tools are enabled', () => {
+    expect(claudeMemSkillAllowlist()).toContain('smart-explore');
   });
 
   it('compact set is knowledge-agent + mem-search + learn-codebase', () => {

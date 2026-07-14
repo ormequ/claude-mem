@@ -19,6 +19,7 @@ import { HOOK_TIMEOUTS, getTimeout } from '../shared/hook-constants.js';
 import { ensureWorkerStarted } from '../services/worker-spawner.js';
 import { searchCodebase, formatSearchResults } from '../services/smart-file-read/search.js';
 import { parseFile, formatFoldedView, unfoldSymbol } from '../services/smart-file-read/parser.js';
+import { smartToolsEnabled, SMART_TOOL_NAMES } from '../shared/smart-tools.js';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -866,6 +867,12 @@ NEVER fetch full details without filtering first. 10x token savings.`,
   }
 ];
 
+// FORK: CLAUDE_MEM_SMART_TOOLS=false removes the tree-sitter tools from
+// registration entirely (codegraph/LSP setups don't want them in context).
+const enabledTools = smartToolsEnabled()
+  ? tools
+  : tools.filter(tool => !SMART_TOOL_NAMES.has(tool.name));
+
 const server = new Server(
   {
     name: 'claude-mem',
@@ -880,7 +887,7 @@ const server = new Server(
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
-    tools: tools.map(tool => ({
+    tools: enabledTools.map(tool => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema
@@ -889,7 +896,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const tool = tools.find(t => t.name === request.params.name);
+  const tool = enabledTools.find(t => t.name === request.params.name);
 
   if (!tool) {
     throw new Error(`Unknown tool: ${request.params.name}`);

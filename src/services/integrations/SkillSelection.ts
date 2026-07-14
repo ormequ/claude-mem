@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, rmSync, statSync } from 'fs';
 import path from 'path';
+import { smartToolsEnabled } from '../../shared/smart-tools.js';
 
 export type ClaudeMemSkillSet = 'default' | 'compact' | 'full';
 
@@ -72,7 +73,12 @@ export function claudeMemSkillAllowlist(
       return COMPACT_CLAUDE_MEM_SKILLS;
     case 'default':
     default:
-      return DEFAULT_CLAUDE_MEM_SKILLS;
+      // FORK: smart-explore is built entirely on the smart_* tools, so it is
+      // dead weight once they are disabled. `full` stays unfiltered by contract;
+      // `compact` never shipped it.
+      return smartToolsEnabled()
+        ? DEFAULT_CLAUDE_MEM_SKILLS
+        : DEFAULT_CLAUDE_MEM_SKILLS.filter(skill => skill !== 'smart-explore');
   }
 }
 
