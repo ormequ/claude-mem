@@ -62,8 +62,13 @@ describe('parseAgentXml concepts whitelist (mode with no vocabulary)', () => {
   });
 
   afterEach(() => {
-    const modeManager = ModeManager.getInstance() as unknown as { activeMode: unknown };
-    modeManager.activeMode = null;
+    // Restore a real loaded mode rather than nulling activeMode:
+    // ModeManager.getActiveMode() throws 'No mode loaded' when activeMode is
+    // null, and ModeManager is a process-global singleton shared across all
+    // test files in one `bun test` run — leaving it null here would land a
+    // cryptic failure on any later-running file that reaches getActiveMode()
+    // without its own loadMode() call.
+    ModeManager.getInstance().loadMode('code');
   });
 
   it('passes concepts through unfiltered when the mode declares no vocabulary', () => {
