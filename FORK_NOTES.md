@@ -107,6 +107,17 @@ This fork keeps local claude-mem fixes in source control instead of patching
   parity). `compact` never shipped smart-explore; `full` stays unfiltered by
   contract.
 
+- `plugin/modes/code.json` concept discipline (2026-07-15): `concept_guidance`
+  switched to sparse tagging (0-2 concepts, only central, empty valid, anti-topic
+  block), a `deliberate-decision` concept was added (strict criteria: explicit
+  choice/revert a future agent must not undo), and the enum reminder is repeated
+  in the prompt footer. Inherited by `code--chill`. Rationale: measured 50%
+  off-vocabulary concept values (28,404/56,954); prompt variants all pass in
+  small contexts, so the failure is long-context attention — the paired
+  write-time whitelist lives in `.plan/2026-07-15-observer-concepts-discipline.md`.
+  Vocabulary governance: new concept ids only with a concrete consumer AND
+  drop-stats evidence (`~/.claude-mem/state/concept-drops.jsonl`).
+
 ## Dropped: smart-file-read / tree-sitter fork work (2026-07-14)
 
 The fork no longer carries any smart-file-read delta. `codegraph` replaced
