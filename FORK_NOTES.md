@@ -86,6 +86,14 @@ This fork keeps local claude-mem fixes in source control instead of patching
   only for fork-authored logic (see `file-staleness.ts` below). The fork also
   exports `deduplicateObservations` + `ObservationRow` so the fork test can
   import them.
+- Ranking changes to the read-hook are gated by `scripts/rank-replay.ts`
+  (replays variants against live DB rows): every known killer observation
+  stays in the top-15 AND the change beats `upstream` on a stated metric,
+  or it does not ship. Ranking-test fixtures come from real DB rows only —
+  a fabricated fixture already shipped one verified regression (concepts
+  boost, 2026-07-15: #24717 rank 6 → 21). Withdrawn ranking ideas are
+  listed in docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md —
+  read them before proposing a new one.
 - The `⚠ may be stale` marker is keyed to the file's last *content* change
   (`git log -1 --format=%ct -- <path>`, mtime fallback for dirty/untracked/
   non-git and any git failure) instead of raw mtime — a merge/checkout no longer
