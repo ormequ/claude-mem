@@ -28,7 +28,21 @@
 - Test: `tests/sdk/parser-concepts-whitelist.test.ts` (new)
 
 **Interfaces:**
-- Produces: `filterConcepts(concepts: string[], allowed: ReadonlySet<string>): { kept: string[]; dropped: string[] }` (exported for tests), and `parseAgentXml(raw, correlationId?, allowedConcepts?: string[])` — third optional param; existing callers keep working unchanged.
+- Produces: `filterConcepts(concepts: string[], allowed: ReadonlySet<string>): { kept: string[]; dropped: string[] }` (exported for tests). `parseAgentXml`'s signature is UNCHANGED — filtering happens inside it, sourced from the active mode.
+
+**Design (revised after pre-flight, 2026-07-15):** `parser.ts` already imports
+`ModeManager` and resolves the active mode internally for type validation
+(`validTypes` from `mode.observation_types`). The original "keep the parser
+pure, caller passes allowedConcepts" instruction was based on a wrong premise
+and is WITHDRAWN: an optional param with no-op default would silently leave the
+server-beta call sites (`processGeneratedResponse.ts:70,192`) unfiltered.
+Instead: read `mode.observation_concepts` from the SAME mode object already
+fetched for types — one source of truth, all three call sites
+(`ResponseProcessor.ts:41`, `processGeneratedResponse.ts:70,192`) covered
+automatically, mode-awareness (law-study, email-investigation, meme-tokens
+vocabularies) for free. If the active mode declares no `observation_concepts`
+(missing or empty), skip filtering entirely — a mode without a vocabulary must
+not have its concepts destroyed.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -53,35 +67,38 @@ describe('filterConcepts', () => {
   });
 });
 
-describe('parseAgentXml concepts whitelist', () => {
+describe('parseAgentXml concepts whitelist (active mode = code)', () => {
   it('drops topic words, keeps canonical (incl. deliberate-decision)', () => {
-    const res = parseAgentXml(xmlWith(['frontend', 'deliberate-decision', 'bug']), 1, CANON);
+    const res = parseAgentXml(xmlWith(['frontend', 'deliberate-decision', 'bug']), 1);
     expect(res.valid).toBe(true);
     if (res.valid) expect(res.observations[0].concepts).toEqual(['deliberate-decision']);
   });
 
   it('still removes the observation type from concepts', () => {
-    const res = parseAgentXml(xmlWith(['discovery', 'gotcha']), 1, CANON);
+    const res = parseAgentXml(xmlWith(['discovery', 'gotcha']), 1);
     if (res.valid) expect(res.observations[0].concepts).toEqual(['gotcha']);
   });
 
   it('does not drop the observation when all concepts are filtered (title is content)', () => {
-    const res = parseAgentXml(xmlWith(['frontend', 'ui']), 1, CANON);
+    const res = parseAgentXml(xmlWith(['frontend', 'ui']), 1);
     expect(res.valid).toBe(true);
     if (res.valid) {
       expect(res.observations).toHaveLength(1);
       expect(res.observations[0].concepts).toEqual([]);
     }
   });
-
-  it('is a no-op when allowedConcepts is not provided (back-compat)', () => {
-    const res = parseAgentXml(xmlWith(['anything-goes']), 1);
-    if (res.valid) expect(res.observations[0].concepts).toEqual(['anything-goes']);
-  });
 });
 ```
 
 Adjust `xmlWith` to the parser's actual expected XML shape — read the fixtures in existing parser tests first (`tests/` has parser coverage; mirror their element names exactly; the placeholder names in `plugin/modes/code.json` — `xml_concept_placeholder` etc. — show the intended tags).
+
+These tests run against the ACTIVE mode (parser resolves it via ModeManager, the
+same way `validTypes` already works) — mirror whatever setup the existing parser
+tests use for mode/type validation (real default `code` mode or a mock). The
+`deliberate-decision` case requires the updated `plugin/modes/code.json`
+(committed 71d8d522). Also add one mode-awareness case following that setup
+pattern: with a mode whose `observation_concepts` is empty/missing, concepts
+pass through unfiltered.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -111,12 +128,20 @@ export function filterConcepts(
 }
 ```
 
-In `parseAgentXml`, add the third optional parameter `allowedConcepts?: string[]` and apply it right after the existing type-leak filter (`cleanedConcepts = concepts.filter(c => c !== finalType)`):
+In `parseAgentXml`, right after the existing type-leak filter
+(`cleanedConcepts = concepts.filter(c => c !== finalType)`), filter against the
+vocabulary of the SAME `mode` object the function already resolves for
+`validTypes` (do not resolve the mode a second time):
 
 ```typescript
+    // FORK: vocabulary enforcement from the same mode object used for types —
+    // one source of truth, applies to all parseAgentXml callers (worker +
+    // server-beta). A mode without observation_concepts declares no vocabulary
+    // and gets no filtering.
+    const allowedConcepts = new Set((mode.observation_concepts ?? []).map(c => c.id));
     let finalConcepts = cleanedConcepts;
-    if (allowedConcepts && allowedConcepts.length > 0) {
-      const { kept, dropped } = filterConcepts(cleanedConcepts, new Set(allowedConcepts));
+    if (allowedConcepts.size > 0) {
+      const { kept, dropped } = filterConcepts(cleanedConcepts, allowedConcepts);
       finalConcepts = kept;
       if (dropped.length > 0) {
         recordConceptDrops(dropped, correlationId);
@@ -124,7 +149,15 @@ In `parseAgentXml`, add the third optional parameter `allowedConcepts?: string[]
     }
 ```
 
-and use `finalConcepts` in the pushed observation. The empty-observation skip check keeps using title/facts/narrative — verify it does not gain a dependency on `finalConcepts` being non-empty beyond what it already had with `cleanedConcepts` (if it currently includes `cleanedConcepts.length === 0` in the all-empty condition, keep that reading from `finalConcepts` — an observation whose ONLY content was invalid concepts should still be skipped).
+(Adapt the variable name to whatever the function actually calls its resolved
+mode; if type validation resolves it inside a narrower scope, hoist the mode
+lookup so types and concepts share one resolution.) Use `finalConcepts` in the
+pushed observation. The empty-observation skip check keeps using
+title/facts/narrative — verify it does not gain a dependency on `finalConcepts`
+being non-empty beyond what it already had with `cleanedConcepts` (if it
+currently includes `cleanedConcepts.length === 0` in the all-empty condition,
+keep that reading from `finalConcepts` — an observation whose ONLY content was
+invalid concepts should still be skipped).
 
 Drop-stats sink (same file or a small sibling module):
 
@@ -142,9 +175,13 @@ function recordConceptDrops(dropped: string[], correlationId?: string | number):
 
 Resolve `DATA_DIR` the way the rest of the SDK does (look at how `paths`/`CLAUDE_MEM_DATA_DIR` is imported in neighboring files; `~/.claude-mem/state/` already exists).
 
-- [ ] **Step 4: Wire the caller with the active mode's vocabulary**
+- [ ] **Step 4: Verify all call sites are covered (no caller changes)**
 
-Find the `parseAgentXml` call sites: `grep -rn "parseAgentXml" src/ --include="*.ts"`. At the worker-side call site(s), pass the active mode's concept ids — `ModeManager` (`src/services/domain/ModeManager.ts`) exposes the loaded mode config whose `observation_concepts[].id` is the vocabulary (read the class for the exact accessor). Fallback when no mode resolves: the 8 code-mode ids inline. Do NOT import ModeManager inside `parser.ts` itself (keep the parser pure; the caller owns mode resolution).
+`grep -rn "parseAgentXml" src/ --include="*.ts"` — expected call sites:
+`ResponseProcessor.ts:41` (worker) and `processGeneratedResponse.ts:70,192`
+(server-beta). Because filtering is internal to `parseAgentXml`, all of them
+get the whitelist with NO caller edits — confirm none of them pre- or
+post-process concepts in a way that bypasses the parser.
 
 - [ ] **Step 5: Run tests and typecheck**
 
