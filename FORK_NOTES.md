@@ -72,12 +72,25 @@ This fork keeps local claude-mem fixes in source control instead of patching
   checkout bumps the working file's mtime past every worktree observation, which
   had been silencing exactly the merged feature-work). See
   `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
-- `PreToolUse:Read` ranking: `deduplicateObservations` in
-  `src/cli/handlers/file-context.ts` gets an **additive** `+2` boost for
-  decision-carrying concepts (`decision`, `gotcha`, `trade-off`,
-  `problem-solution`), applied after the upstream specificity score. Type is
-  never a sort key or filter — simulation-verified to bury the deliberate-revert
-  class (#24717, `type=change`). Display cap stays 15.
+- `PreToolUse:Read` ranking: the **scoring** in `deduplicateObservations`
+  (`src/cli/handlers/file-context.ts`) is **pure upstream specificity** —
+  in-modified-file and total-files-touched, sorted descending, capped at 15.
+  Type is never a sort key or filter. The fork's remaining delta inside that
+  function is the dedup key, not the score: content-dedup by normalized title
+  instead of upstream's `memory_session_id` (which kept only the newest
+  observation per session — the blandest wrap-up — and dropped its
+  decision-carrying siblings). An additive `+2` concept boost (`decision`, `gotcha`,
+  `trade-off`, `problem-solution`) was tried and **reverted**: it demoted the
+  very observation it was written to protect (#24717, the "deliberate
+  revert" class, `type=change`) from rank 6 to rank 21 on live `kedo` rows,
+  because #24717's own concepts (`what-changed`, `how-it-works`) weren't in
+  the boost set while 25 of 40 competing rows for the same file were — the
+  boost lifted background noise, not the signal. The regression was invisible
+  to the unit test because that test's fixture fabricated a `decision`
+  concept onto the #24717-class row that the real observation never had.
+  Caught by `scripts/rank-replay.ts` against real DB rows; see the gate rule
+  below. Ranking stays pure upstream specificity until a replacement clears
+  that gate.
   The delta is **deliberately inline, not extracted**: the function and its
   whole scoring block are upstream code (`origin/main` carries it). Extracting
   it to a fork-owned module would take permanent ownership of an upstream

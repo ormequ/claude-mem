@@ -53,13 +53,6 @@ export interface ObservationRow {
   concepts: string | null;
 }
 
-// FORK: concepts the observer tags at capture time that mark decision-carrying
-// content. Additive score boost ONLY — never a sort key, never a filter:
-// type/priority-based selection is simulation-proven to bury the
-// "deliberate revert" class (#24717, type=change).
-const BOOST_CONCEPTS = new Set(['decision', 'gotcha', 'trade-off', 'problem-solution']);
-const CONCEPT_BOOST = 2;
-
 export function deduplicateObservations(
   observations: ObservationRow[],
   targetPath: string,
@@ -90,11 +83,6 @@ export function deduplicateObservations(
     if (inModified) specificityScore += 2;
     if (totalFiles <= 3) specificityScore += 2;
     else if (totalFiles <= 8) specificityScore += 1;
-
-    // FORK: additive only, applied after the upstream specificity score.
-    if (parseJsonArray(obs.concepts).some(c => BOOST_CONCEPTS.has(c))) {
-      specificityScore += CONCEPT_BOOST;
-    }
 
     return { obs, specificityScore };
   });

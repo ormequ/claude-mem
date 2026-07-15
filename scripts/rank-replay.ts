@@ -41,14 +41,12 @@ function dedup(rows: Row[]): Row[] {
   return out;
 }
 
-// Mirrors deduplicateObservations in src/cli/handlers/file-context.ts
-// (as of the concept-boost commit): exact normalized-path match against
-// files_modified (production compares `f.replace(/\\/g,'/') === target`, not
-// endsWith), plus the additive decision-concept boost applied after the
-// upstream specificity score.
-const BOOST_CONCEPTS = new Set(['decision', 'gotcha', 'trade-off', 'problem-solution']);
-const CONCEPT_BOOST = 2;
-
+// Mirrors deduplicateObservations in src/cli/handlers/file-context.ts: exact
+// normalized-path match against files_modified (production compares
+// `f.replace(/\\/g,'/') === target`, not endsWith). The concept boost this
+// once carried was reverted (2026-07-15) — it demoted #24717, the
+// observation it was written to protect, from rank 6 to rank 21 on live
+// data. Pure upstream specificity now.
 function specificity(o: Row, target: string): number {
   const fr = parseArr(o.files_read), fm = parseArr(o.files_modified);
   const total = fr.length + fm.length;
@@ -57,7 +55,6 @@ function specificity(o: Row, target: string): number {
   let s = 0;
   if (inMod) s += 2;
   if (total <= 3) s += 2; else if (total <= 8) s += 1;
-  if (parseArr(o.concepts).some(c => BOOST_CONCEPTS.has(c))) s += CONCEPT_BOOST;
   return s;
 }
 

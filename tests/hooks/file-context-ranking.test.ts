@@ -16,7 +16,7 @@ function obs(over: Partial<ObservationRow> & { id: number }): ObservationRow {
   };
 }
 
-describe('deduplicateObservations — fork concepts boost', () => {
+describe('deduplicateObservations — content dedup + upstream specificity', () => {
   it('collapses exact re-captures by normalized title, keeps distinct titles', () => {
     const rows = [
       obs({ id: 1, title: 'Fixed the   thing' }),
@@ -32,26 +32,9 @@ describe('deduplicateObservations — fork concepts boost', () => {
     expect(deduplicateObservations(rows, TARGET, 15)).toHaveLength(2);
   });
 
-  it('boosts decision-carrying concepts over chronicle noise under the cap (killer #24717 class)', () => {
-    // 16 newer chronicle entries + 1 old revert with a decision concept.
-    // Without the boost the revert would be squeezed out of the top 15
-    // when specificity ties.
-    const chronicle = Array.from({ length: 16 }, (_, i) =>
-      obs({ id: 100 + i, concepts: JSON.stringify(['what-changed']) }));
-    const revert = obs({
-      id: 1,
-      type: 'change',
-      title: 'Gallery Close Button Position Reverted',
-      concepts: JSON.stringify(['decision', 'what-changed']),
-      created_at_epoch: 1_600_000_000_000, // oldest of all
-    });
-    const ranked = deduplicateObservations([...chronicle, revert], TARGET, 15);
-    expect(ranked.map(o => o.id)).toContain(1);
-  });
-
-  it('never uses type as a filter: low-priority type with boosted concept survives', () => {
+  it('never uses type as a filter: low-priority type still survives', () => {
     const ranked = deduplicateObservations(
-      [obs({ id: 1, type: 'change', concepts: JSON.stringify(['gotcha']) })],
+      [obs({ id: 1, type: 'change' })],
       TARGET, 15,
     );
     expect(ranked).toHaveLength(1);
