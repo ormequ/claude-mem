@@ -1,6 +1,9 @@
 
+import { appendFileSync } from 'fs';
+import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import { ModeManager } from '../services/domain/ModeManager.js';
+import { DATA_DIR } from '../shared/paths.js';
 
 // TODO(#2233): migrate to Anthropic tool-use API for deterministic JSON output. This text-XML path is the bridge.
 // Only strip fences when the entire payload is a single fenced block. Stripping
@@ -37,6 +40,33 @@ export interface ParsedSummary {
 export type ParseResult =
   | { valid: true; observations: ParsedObservation[]; summary: ParsedSummary | null }
   | { valid: false };
+
+// FORK: write-time vocabulary enforcement. The model ignores the prompt-level
+// enum at scale (50% of stored concept values were off-vocabulary; the Z.AI
+// endpoint silently ignores response_format/json_schema, so constrained
+// decoding is unavailable). The parser is the one chokepoint every
+// observation passes through.
+export function filterConcepts(
+  concepts: string[],
+  allowed: ReadonlySet<string>,
+): { kept: string[]; dropped: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const c of concepts) {
+    (allowed.has(c) ? kept : dropped).push(c);
+  }
+  return { kept, dropped };
+}
+
+function recordConceptDrops(dropped: string[], correlationId?: string | number): void {
+  logger.debug('PARSER', 'Dropped off-vocabulary concepts', { correlationId, dropped });
+  try {
+    const line = JSON.stringify({ ts: Date.now(), dropped, correlationId: correlationId ?? null });
+    appendFileSync(join(DATA_DIR, 'state', 'concept-drops.jsonl'), line + '\n');
+  } catch {
+    // stats are best-effort; never fail parsing over them
+  }
+}
 
 export function parseAgentXml(raw: string, correlationId?: string | number): ParseResult {
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -127,7 +157,21 @@ function parseObservationBlocks(text: string, correlationId?: string | number): 
       });
     }
 
-    if (!title && !narrative && facts.length === 0 && cleanedConcepts.length === 0) {
+    // FORK: vocabulary enforcement from the same mode object used for types —
+    // one source of truth, applies to all parseAgentXml callers (worker +
+    // server-beta). A mode without observation_concepts declares no vocabulary
+    // and gets no filtering.
+    const allowedConcepts = new Set((mode.observation_concepts ?? []).map(c => c.id));
+    let finalConcepts = cleanedConcepts;
+    if (allowedConcepts.size > 0) {
+      const { kept, dropped } = filterConcepts(cleanedConcepts, allowedConcepts);
+      finalConcepts = kept;
+      if (dropped.length > 0) {
+        recordConceptDrops(dropped, correlationId);
+      }
+    }
+
+    if (!title && !narrative && facts.length === 0 && finalConcepts.length === 0) {
       logger.warn('PARSER', 'Skipping empty observation (all content fields null)', {
         correlationId,
         type: finalType
@@ -141,7 +185,7 @@ function parseObservationBlocks(text: string, correlationId?: string | number): 
       subtitle,
       facts,
       narrative,
-      concepts: cleanedConcepts,
+      concepts: finalConcepts,
       files_read,
       files_modified
     });
