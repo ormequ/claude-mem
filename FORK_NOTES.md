@@ -128,6 +128,20 @@ This fork keeps local claude-mem fixes in source control instead of patching
   parity). `compact` never shipped smart-explore; `full` stays unfiltered by
   contract.
 
+- `src/sdk/parser.ts` enforces the active mode's `observation_concepts`
+  vocabulary at parse time (`filterConcepts`, `recordConceptDrops`, and the
+  mode-sourced filter block inside `parseObservationBlocks`) — upstream code
+  now carrying a fork-specific delta. The model ignores the prompt-level enum
+  at scale (50% of stored concept values were off-vocabulary, 28,404/56,954
+  measured 2026-07-15), and the Z.AI coding endpoint silently ignores
+  `response_format: json_schema`, so constrained decoding is not available;
+  write-time filtering at the parser is the one chokepoint all three callers
+  pass through (`ResponseProcessor.ts:41`, `processGeneratedResponse.ts:70,192`),
+  so none of them need caller-side changes. The vocabulary comes from the SAME
+  `mode` object already resolved for `validTypes` — one source of truth, and
+  `parseAgentXml`'s signature is deliberately unchanged. A mode that declares
+  no `observation_concepts` is a strict no-op (concepts pass through
+  unfiltered). Drop stats land in `~/.claude-mem/state/concept-drops.jsonl`.
 - `plugin/modes/code.json` concept discipline (2026-07-15): `concept_guidance`
   switched to sparse tagging (0-2 concepts, only central, empty valid, anti-topic
   block), a `deliberate-decision` concept was added (strict criteria: explicit
@@ -135,7 +149,8 @@ This fork keeps local claude-mem fixes in source control instead of patching
   in the prompt footer. Inherited by `code--chill`. Rationale: measured 50%
   off-vocabulary concept values (28,404/56,954); prompt variants all pass in
   small contexts, so the failure is long-context attention — the paired
-  write-time whitelist lives in `.plan/2026-07-15-observer-concepts-discipline.md`.
+  write-time whitelist lives in `src/sdk/parser.ts` (above); the plan at
+  `.plan/2026-07-15-observer-concepts-discipline.md` records the rationale.
   Vocabulary governance: new concept ids only with a concrete consumer AND
   drop-stats evidence (`~/.claude-mem/state/concept-drops.jsonl`).
 
@@ -208,8 +223,8 @@ history is authored upstream); fork changes live on `fork-fixes`.
   abandoned deny/block behavior ("blocks the read and instead shows a compact
   timeline"). Do not treat it as current; the code is allow-mode.
 - The fork's deltas on this hook (mtime→annotate, git-content staleness,
-  `merged_into_project` by-file scoping, concepts boost, header trim — all
-  above) never touch the allow/deny decision. Keep it that way.
+  `merged_into_project` by-file scoping, header trim — all above) never touch
+  the allow/deny decision. Keep it that way.
 
 ## Runbook: Chroma corruption recovery
 

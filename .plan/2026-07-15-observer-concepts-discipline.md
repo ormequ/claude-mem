@@ -335,7 +335,7 @@ git commit -m "feat(tools): ranking replay harness gating read-hook scoring chan
 
 ### Measurement protocol (manual, ~2 weeks after deploy — owner runs it)
 
-1. Distribution: `deliberate-decision` share among new rows should be rare (<3%); mean concepts per new observation should drop from ~2.1 toward ~1.5; zero off-vocabulary values in DB (whitelist guarantees this — verify as a smoke check).
+1. Distribution: `deliberate-decision` share among new rows should be rare (<3%); mean concepts per new observation should drop from ~2.1 toward ~1.5; zero off-vocabulary values among rows created AFTER the deploy timestamp (the whitelist only guarantees this going forward — the 28,404 pre-existing off-vocabulary values are untouched and unbackfilled, so scope the smoke check to post-deploy rows or it will "fail" against a correct implementation).
 2. Drop-stats: `~/.claude-mem/state/concept-drops.jsonl` — top dropped values = the model's real vocabulary demand. A concept id gets legalized only with a consumer + this evidence.
 3. Precision: 20 random new rows tagged `deliberate-decision` — how many record an actual explicit decision/revert? Plus one controlled test: perform a deliberate revert in a session, check it gets tagged.
 4. Green on 1-3 → design an epoch-gated ranking variant and take it through `scripts/rank-replay.ts`. Red → the signal idea dies quietly and ranking stays upstream forever.

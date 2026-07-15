@@ -1,5 +1,5 @@
 
-import { appendFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import { ModeManager } from '../services/domain/ModeManager.js';
@@ -61,10 +61,15 @@ export function filterConcepts(
 function recordConceptDrops(dropped: string[], correlationId?: string | number): void {
   logger.debug('PARSER', 'Dropped off-vocabulary concepts', { correlationId, dropped });
   try {
+    const dir = join(DATA_DIR, 'state');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const line = JSON.stringify({ ts: Date.now(), dropped, correlationId: correlationId ?? null });
-    appendFileSync(join(DATA_DIR, 'state', 'concept-drops.jsonl'), line + '\n');
-  } catch {
+    appendFileSync(join(dir, 'concept-drops.jsonl'), line + '\n');
+  } catch (error: unknown) {
     // stats are best-effort; never fail parsing over them
+    logger.debug('PARSER', 'Failed to persist concept-drop stats', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

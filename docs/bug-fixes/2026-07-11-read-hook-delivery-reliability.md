@@ -205,3 +205,45 @@ Two data-backed tweaks remain for the owner (non-blocking):
    check (git blob hash at observation time vs now), which shrinks the marker
    to “this file's content actually changed” and restores its signal (the
    previously-discussed step-2 idea; region-aware tracking is not required).
+
+---
+
+## 2026-07-15 — tweak #1 (intent-ordering) implemented, measured, and reverted
+
+Tweak #1 above ("surfacing fix/decision-tagged entries above informational
+narration") was implemented as an additive `+2` concept boost for `decision`,
+`gotcha`, `trade-off`, `problem-solution` in `deduplicateObservations`
+(`src/cli/handlers/file-context.ts`). It shipped, then was caught and reverted
+the same day by `scripts/rank-replay.ts` replaying it against live `kedo`
+rows: it demoted **#24717 — the exact observation this doc's tweak #1 cites —
+from rank 6 to rank 21**, dropping it out of the top-15 entirely. #24717's own
+concepts (`what-changed`, `how-it-works`) were never in the boosted set, while
+25 of the 40 competing rows on the same file were, so the boost lifted
+background noise instead of the signal it was written to protect. Root cause:
+the unit test that shipped with the boost fabricated a `decision` concept onto
+the #24717-class fixture row that the real observation never had, so the
+regression was invisible to `bun test` and only surfaced against real DB rows.
+Full writeup in `FORK_NOTES.md` ("Local fixes carried by the fork" /
+`PreToolUse:Read` ranking section).
+
+Note on the numbers above: this doc's tweak #1 says "#24717 sat at position
+10/15" — that was the pre-boost, pre-dedup-fix chronological position measured
+2026-07-12. The rank-6 baseline quoted here is the current (2026-07-15)
+upstream-specificity ranking, measured after content-dedup shipped. The two
+figures are not contradictory; they are dated differently and were taken under
+different ranking logic.
+
+**Status: withdrawn, superseded by `scripts/rank-replay.ts`.** Tweak #1 (any
+concept/intent-based boost) does not ship without clearing that gate against
+live rows first. Do not re-propose it from this doc's earlier "justified by
+measurement" framing above — that framing predates the revert.
+
+Two further ranking variants were also tried and killed by the same harness on
+2026-07-15, but are recorded only in
+`.plan/2026-07-15-observer-concepts-discipline.md`, not here:
+- a narrower "rare concepts" boost — regressed #24717 from rank 6 to rank 7 (an
+  improvement in absolute terms is not the bar; it still doesn't beat upstream
+  on the harness's stated metric, so it did not ship),
+- a "pure what-changed" demotion — a no-op on the tested rows (premise 0/40:
+  none of the 40 competing rows for the tested file actually carried
+  `what-changed` as their sole concept, so the variant had nothing to act on).

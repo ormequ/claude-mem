@@ -50,6 +50,9 @@ describe('deduplicateObservations — content dedup + upstream specificity', () 
     const filler = Array.from({ length: 14 }, (_, i) => obs({ id: 100 + i }));
     const ranked = deduplicateObservations([broad, specific, ...filler], TARGET, 15);
     expect(ranked.map(o => o.id)).toContain(1);
+    // 16 rows, cap 15: `specific` scores 4 same as every filler, so it survives
+    // even under a no-scoring mutant — only `broad` (score 0) is discriminating.
+    expect(ranked.map(o => o.id)).not.toContain(2);
   });
 
   it('respects the display limit', () => {
