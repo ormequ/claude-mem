@@ -3,6 +3,12 @@
 This fork keeps local claude-mem fixes in source control instead of patching
 `~/.claude/plugins/cache` or installed marketplace files by hand.
 
+Installing it? Follow `INSTALL_FORK.md` — an agent runbook that asks the human
+for the skill set, the harnesses, and whether to drop the `smart_*` MCP tools
+before touching anything. Installing with defaults is how the picker silently
+ends up on `default`. This file stays the authority on *why* those defaults
+differ; INSTALL_FORK.md is the *how*.
+
 ## Runtime policy
 
 - Worker runtime remains the default runtime for this fork.
