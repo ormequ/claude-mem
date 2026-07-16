@@ -142,6 +142,28 @@ differ; INSTALL_FORK.md is the *how*.
   startup: the worker lives for weeks, so a branch merged between restarts was
   invisible to project-scoped queries until someone ran `adopt`. Skips ticks
   while a run is in flight, survives runner failures, unrefs the timer.
+- Adoption discovers its repo list from a durable registry
+  (`src/services/infrastructure/KnownCwdRegistry.ts`, fork-owned;
+  `~/.claude-mem/state/known-cwds.json`), unioned with the live queue.
+  `adoptMergedWorktreesForAllKnownRepos` previously read cwds ONLY from
+  `pending_messages` — a queue whose rows are deleted the moment an observation
+  is processed, so it is empty almost always. Discovery then resolved zero
+  repos and returned early at a `logger.debug` line that is never written to
+  the log file, which made both callers (the worker-boot pass AND the hourly
+  tick above) silent no-ops: the hourly re-run this fork added had, in
+  practice, never adopted anything except by the lottery of a message being
+  in flight at the exact tick instant. Measured 2026-07-16: a manual `adopt`
+  left `chromaFailed=384`, and the next tick logged nothing at all.
+  The registry records RAW cwds, not resolved repo roots — resolving costs a
+  `git rev-parse` subprocess and the recording site (`SessionManager`'s
+  observation enqueue, upstream, one line) is a per-tool-call hot path; a
+  known cwd costs one Set lookup and no I/O. Adoption resolves lazily, as it
+  already did. Dead paths (removed worktrees) are pruned on write.
+  Note the retry itself was always correct and is what heals a failed Chroma
+  patch: the select deliberately re-picks already-merged rows
+  (`merged_into_project IS NULL OR merged_into_project = ?`), so a run whose
+  Chroma half failed is repaired by the next run that actually happens — which
+  is precisely what discovery was starving.
 - `CLAUDE_MEM_SMART_TOOLS=false|0` removes `smart_search`/`smart_unfold`/
   `smart_outline` from MCP registration (both ListTools and CallTool) and drops
   `smart-explore` from the default skill set. Default: enabled (upstream
@@ -279,6 +301,28 @@ is lost):
 If this recurs a third time, automate it (subprocess-death counter →
 quarantine + rebuild); until then the manual ritual is cheaper than the code.
 
+## Gotcha: `adopt` from the CLI while the worker is running
+
+The CLI `adopt` command runs in its OWN process, so its `ChromaSync` builds a
+fresh `ChromaMcpManager` and tries to open a second persistent writer over
+`~/.claude-mem/chroma`. The writer-lock guard correctly refuses:
+`Chroma data dir … is already owned by PID <worker>; refusing to start a second
+writer`. The SQL half still commits, so the run reports
+`chromaUpdates=0, chromaFailed=N` and the printed "will retry on next run" is
+the honest path — but only the WORKER's own passes can do that retry.
+
+In-worker adoption never hits this: `ChromaMcpManager` is a per-process
+singleton (`getInstance()`), and `acquireChromaWriterLock` early-returns when
+the same `dataDir` lock is already held, so the boot/hourly passes reuse the
+live connection. Do NOT "fix" this by relaxing the pid/ownerId check in
+`ChromaMcpManager` — a second manager in one process would spawn a second
+chroma-mcp over the same store, which is the 2026-07-11 multi-instance
+incident the lock exists to prevent.
+
+To force an immediate full adoption including the Chroma patch: stop the
+worker, run `adopt`, start the worker. Otherwise just let the hourly tick do
+it (see the registry note above — that tick only became real on 2026-07-16).
+
 ## Upgrade checklist
 
 After rebasing or merging upstream:
@@ -286,7 +330,11 @@ After rebasing or merging upstream:
 1. Rebuild generated bundles with `bun run build`.
 2. Run `bun run typecheck`.
 3. Run the fork-focused tests:
-   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts tests/services/sqlite/observations-by-file-merged-scoping.test.ts tests/hooks/file-context.test.ts tests/hooks/file-context-ranking.test.ts tests/hooks/file-staleness.test.ts tests/services/infrastructure/adoption-scheduler.test.ts tests/shared/smart-tools.test.ts`.
+   `bun test tests/telemetry/consent.test.ts tests/integration/skill-selection.test.ts tests/integration/opencode-installer.test.ts tests/install-non-tty.test.ts tests/services/sqlite/observations-by-file-merged-scoping.test.ts tests/hooks/file-context.test.ts tests/hooks/file-context-ranking.test.ts tests/hooks/file-staleness.test.ts tests/services/infrastructure/ tests/shared/smart-tools.test.ts tests/services/sync/chroma-mcp-manager-singleton.test.ts`.
+   Run them with the sandbox disabled — it denies reads of `./node_modules`,
+   so every test that imports a real dependency dies at module resolution
+   ("Cannot find module '@modelcontextprotocol/sdk/…'") and reads as a code
+   failure when nothing is wrong.
 4. Run `claude plugin validate .`.
 5. Install from this checkout, not from a patched cache directory.
 6. Smoke test:

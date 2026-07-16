@@ -5,6 +5,7 @@ import { SessionMessageBuffer } from './SessionMessageBuffer.js';
 import { getSdkProcessForSession, ensureSdkProcessExit } from '../../supervisor/process-registry.js';
 import { getSupervisor } from '../../supervisor/index.js';
 import { telemetryBuffer } from '../telemetry/buffer.js';
+import { recordCwd } from '../infrastructure/KnownCwdRegistry.js';
 
 export class SessionManager {
   private dbManager: DatabaseManager;
@@ -153,6 +154,12 @@ export class SessionManager {
     if (!session) {
       session = this.initializeSession(sessionDbId);
     }
+
+    // FORK: the queue row below is deleted once processed, and merged-worktree
+    // adoption used to discover its repo list from exactly those rows — so it
+    // almost always found none. Remember the cwd durably instead. Costs one
+    // Set lookup for an already-known cwd.
+    recordCwd(data.cwd);
 
     const message: PendingMessage = {
       type: 'observation',

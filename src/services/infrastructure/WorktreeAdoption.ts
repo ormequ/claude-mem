@@ -7,6 +7,7 @@ import { getProjectContext } from '../../utils/project-name.js';
 import { ChromaSync } from '../sync/ChromaSync.js';
 import { paths } from '../../shared/paths.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
+import { listKnownCwds, recordCwd } from './KnownCwdRegistry.js';
 
 const DEFAULT_DATA_DIR = paths.dataDir();
 
@@ -367,11 +368,24 @@ export async function adoptMergedWorktreesForAllKnownRepos(opts: {
     `).all() as Array<{ cwd: string }>;
 
     for (const { cwd } of cwdRows) {
+      // FORK: pending_messages is a transient queue — feed anything it happens
+      // to show into the durable registry before it drains.
+      recordCwd(cwd, dataDirectory);
       const mainRepo = resolveMainRepoPath(cwd);
       if (mainRepo) uniqueParents.add(mainRepo);
     }
   } finally {
     db?.close();
+  }
+
+  // FORK: the queue above is empty almost all of the time (rows are deleted as
+  // soon as an observation is processed), which left this function resolving
+  // zero repos and returning early at a debug log — so neither the boot pass
+  // nor the hourly tick ever adopted anything unless a message happened to be
+  // in flight at that instant. The registry is the durable half of discovery.
+  for (const cwd of listKnownCwds(dataDirectory)) {
+    const mainRepo = resolveMainRepoPath(cwd);
+    if (mainRepo) uniqueParents.add(mainRepo);
   }
 
   if (uniqueParents.size === 0) {
