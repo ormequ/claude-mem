@@ -23,17 +23,20 @@ export const DEFAULT_CLAUDE_MEM_SKILLS = [
 ] as const;
 
 /**
- * Compact set: memory retrieval core plus the one situational tool worth a
+ * Compact set: memory retrieval core plus the situational tools worth a
  * permanent slot. `learn-codebase` was dropped — it brute-reads every file to
  * front-load context, which `codegraph` (queried on demand) makes dead weight
- * in an indexed repo. `pathfinder` (architecture audit before a refactor) takes
- * its place: not "memory", but the heavy tool this fork's owner actually reaches
- * for. Reports (`timeline-report`/`weekly-digests`) stay `full`-on-demand.
+ * in an indexed repo. `pathfinder` (architecture audit before a refactor) took
+ * its place: not "memory", but a heavy tool actually reached for.
+ * `timeline-report` is the one narrative report kept — `weekly-digests` reads
+ * the same whole-history data as serial per-week chapters, so shipping both
+ * duplicates the same source in two formats.
  */
 export const COMPACT_CLAUDE_MEM_SKILLS = [
   'knowledge-agent',
   'mem-search',
   'pathfinder',
+  'timeline-report',
 ] as const;
 
 export type SkillFilterResult = {

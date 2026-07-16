@@ -11,7 +11,7 @@ const DEFAULT_CLAUDE_MEM_SKILLS = [
   'timeline-report', 'weekly-digests', 'standup', 'pathfinder',
   'knowledge-agent',
 ];
-const COMPACT_CLAUDE_MEM_SKILLS = ['knowledge-agent', 'mem-search', 'pathfinder'];
+const COMPACT_CLAUDE_MEM_SKILLS = ['knowledge-agent', 'mem-search', 'pathfinder', 'timeline-report'];
 
 // Mirror resolveClaudeMemSkillSet() in SkillSelection.ts.
 function resolveSkillSet() {

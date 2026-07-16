@@ -26,14 +26,16 @@ This fork keeps local claude-mem fixes in source control instead of patching
     - `mem-search`, `smart-explore`, `learn-codebase`, `how-it-works`,
       `timeline-report`, `weekly-digests`, `standup`, `pathfinder`,
       `knowledge-agent`
-  - `compact` — memory core + one situational tool: `knowledge-agent`,
-    `mem-search`, `pathfinder`. `learn-codebase` was dropped (2026-07-16): it
-    brute-reads every file to front-load context, which `codegraph` (queried on
-    demand) makes dead weight in an indexed repo. `pathfinder` (architecture
-    audit before a refactor) took its slot — not "memory", but the one heavy
-    tool actually reached for; the reports (`timeline-report`/`weekly-digests`)
-    stay `full`-on-demand because whole-history narrative is a run-once class,
-    not a compact essential.
+  - `compact` — memory core + the situational tools worth a permanent slot:
+    `knowledge-agent`, `mem-search`, `pathfinder`, `timeline-report`.
+    `learn-codebase` was dropped (2026-07-16): it brute-reads every file to
+    front-load context, which `codegraph` (queried on demand) makes dead weight
+    in an indexed repo. `pathfinder` (architecture audit before a refactor) took
+    its slot — not "memory", but a heavy tool actually reached for.
+    `timeline-report` is the one narrative report kept; `weekly-digests` reads
+    the same whole-history data as serial per-week chapters ("If the user wants
+    a single sweeping report, use timeline-report instead" — its own SKILL.md),
+    so shipping both duplicates one source in two formats.
   - `full` — every bundled skill (no filtering)
 - Legacy `CLAUDE_MEM_INSTALL_ALL_SKILLS=true` still maps to `full`;
   `CLAUDE_MEM_SKILL_SET` takes precedence when both are set.
@@ -133,6 +135,20 @@ This fork keeps local claude-mem fixes in source control instead of patching
   `smart-explore` from the default skill set. Default: enabled (upstream
   parity). `compact` never shipped smart-explore; `full` stays unfiltered by
   contract.
+  **It is env-only — `~/.claude-mem/settings.json` does NOT work for it.** Two
+  independent reasons: `smartToolsEnabled()` reads `process.env` directly and
+  never consults settings, and `SettingsDefaultsManager.loadFromFile` copies
+  only keys present in its `DEFAULTS` whitelist, which does not carry
+  `CLAUDE_MEM_SMART_TOOLS` — an entry there is silently dropped. The MCP server
+  loads no settings file at all, so env is its only channel. Set it in the
+  `env` block of `~/.claude/settings.json`; `plugin/.mcp.json` spawns the
+  server with `stdio: 'inherit'`, so Claude Code's env propagates. This is a
+  deliberate inconsistency with every other setting (which is settings.json-
+  driven): routing it through `SettingsDefaultsManager` would put a fork delta
+  in an upstream file and buy merge cost, while `smart-tools.ts` is fork-owned.
+  Note a `permissions.deny` on the `smart_*` tools is **not** equivalent — it
+  blocks calls but leaves the tools registered, so their schemas still cost
+  context. Removal from registration is the point.
 
 - `src/sdk/parser.ts` enforces the active mode's `observation_concepts`
   vocabulary at parse time (`filterConcepts`, `recordConceptDrops`, and the
