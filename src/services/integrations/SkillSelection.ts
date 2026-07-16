@@ -89,6 +89,45 @@ export function claudeMemSkillAllowlist(
   }
 }
 
+/**
+ * Parse the optional extra bundled skills without changing their configured
+ * order. Empty entries and repeats are intentionally ignored.
+ */
+export function resolveClaudeMemExtraSkills(): readonly string[] {
+  const configured = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS ?? '';
+  return [...new Set(
+    configured.split(',').map((skill) => skill.trim()).filter(Boolean),
+  )];
+}
+
+function listBundledSkillNames(skillsDirectory: string): string[] {
+  return readdirSync(skillsDirectory)
+    .sort()
+    .filter((entry) => statSync(path.join(skillsDirectory, entry)).isDirectory());
+}
+
+/**
+ * Resolve the configured preset plus validated extras for a bundled skills
+ * directory. `null` means every bundled skill should be installed.
+ */
+export function resolveClaudeMemSkillNames(skillsDirectory: string): readonly string[] | null {
+  const set = resolveClaudeMemSkillSet();
+  const extras = resolveClaudeMemExtraSkills();
+  const available = listBundledSkillNames(skillsDirectory);
+  const availableSet = new Set(available);
+  const unknown = extras.filter((skill) => !availableSet.has(skill));
+
+  if (unknown.length > 0) {
+    const label = unknown.length === 1 ? 'skill' : 'skills';
+    throw new Error(
+      `Unknown Claude-Mem extra ${label}: ${unknown.join(', ')}. Available bundled skills: ${available.join(', ')}`,
+    );
+  }
+
+  const preset = claudeMemSkillAllowlist(set);
+  return preset === null ? null : [...new Set([...preset, ...extras])];
+}
+
 /** Back-compat helper: true when the resolved set keeps every bundled skill. */
 export function shouldInstallAllClaudeMemSkills(): boolean {
   return resolveClaudeMemSkillSet() === 'full';
@@ -96,13 +135,17 @@ export function shouldInstallAllClaudeMemSkills(): boolean {
 
 export function filterClaudeMemSkillsDirectory(skillsDirectory: string): SkillFilterResult {
   const set = resolveClaudeMemSkillSet();
-  const allowlist = claudeMemSkillAllowlist(set);
 
-  if (allowlist === null || !existsSync(skillsDirectory)) {
+  if (!existsSync(skillsDirectory)) {
     return { filtered: false, set, kept: [], removed: [] };
   }
 
-  const allowed = new Set<string>(allowlist);
+  const allowlist = resolveClaudeMemSkillNames(skillsDirectory);
+  if (allowlist === null) {
+    return { filtered: false, set, kept: [], removed: [] };
+  }
+
+  const allowed = new Set(allowlist);
   const kept: string[] = [];
   const removed: string[] = [];
 
@@ -122,4 +165,8 @@ export function filterClaudeMemSkillsDirectory(skillsDirectory: string): SkillFi
   }
 
   return { filtered: true, set, kept, removed };
+}
+
+export function filterClaudeMemSkillsInPluginRoot(pluginRoot: string): SkillFilterResult {
+  return filterClaudeMemSkillsDirectory(path.join(pluginRoot, 'skills'));
 }

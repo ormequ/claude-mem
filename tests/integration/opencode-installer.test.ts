@@ -18,6 +18,8 @@ describe('OpenCode installer config registration', () => {
   let previousConfigDir: string | undefined;
   let previousClaudeConfigDir: string | undefined;
   let previousInstallAllSkills: string | undefined;
+  let previousSkillSet: string | undefined;
+  let previousInstallExtraSkills: string | undefined;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `opencode-installer-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -25,9 +27,13 @@ describe('OpenCode installer config registration', () => {
     previousConfigDir = process.env.OPENCODE_CONFIG_DIR;
     previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
     previousInstallAllSkills = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    previousSkillSet = process.env.CLAUDE_MEM_SKILL_SET;
+    previousInstallExtraSkills = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
     process.env.OPENCODE_CONFIG_DIR = tempDir;
     process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'claude');
     delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    delete process.env.CLAUDE_MEM_SKILL_SET;
+    delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
   });
 
   afterEach(() => {
@@ -45,6 +51,16 @@ describe('OpenCode installer config registration', () => {
       delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
     } else {
       process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = previousInstallAllSkills;
+    }
+    if (previousSkillSet === undefined) {
+      delete process.env.CLAUDE_MEM_SKILL_SET;
+    } else {
+      process.env.CLAUDE_MEM_SKILL_SET = previousSkillSet;
+    }
+    if (previousInstallExtraSkills === undefined) {
+      delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    } else {
+      process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = previousInstallExtraSkills;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -170,5 +186,43 @@ describe('OpenCode installer config registration', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('installs compact skills plus configured extras', async () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babysit,weekly-digests';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      expect(existsSync(join(getInstalledSkillsPath(), 'knowledge-agent', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'pathfinder', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'timeline-report', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'babysit', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'weekly-digests', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'learn-codebase'))).toBe(false);
+      expect(existsSync(join(getInstalledSkillsPath(), 'standup'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps installed skills when an extra is invalid', async () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babisit';
+    const markerPath = join(getInstalledSkillsPath(), 'standup', 'preserve.txt');
+    mkdirSync(join(getInstalledSkillsPath(), 'standup'), { recursive: true });
+    writeFileSync(markerPath, 'preserve', 'utf-8');
+
+    const result = await installOpenCodeIntegration();
+
+    expect(result).toBe(1);
+    expect(readFileSync(markerPath, 'utf-8')).toBe('preserve');
   });
 });

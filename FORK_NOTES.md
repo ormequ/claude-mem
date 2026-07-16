@@ -43,6 +43,12 @@ differ; INSTALL_FORK.md is the *how*.
     a single sweeping report, use timeline-report instead" — its own SKILL.md),
     so shipping both duplicates one source in two formats.
   - `full` — every bundled skill (no filtering)
+- `CLAUDE_MEM_INSTALL_EXTRA_SKILLS` extends the `default` or `compact` set
+  with comma-separated bundled skill directory names; for example,
+  `CLAUDE_MEM_SKILL_SET=compact CLAUDE_MEM_INSTALL_EXTRA_SKILLS=babysit,weekly-digests`.
+  Names are trimmed and deduplicated. Unknown names abort the install and list
+  the available bundled skills. `full` validates configured names but retains
+  every bundled skill.
 - Legacy `CLAUDE_MEM_INSTALL_ALL_SKILLS=true` still maps to `full`;
   `CLAUDE_MEM_SKILL_SET` takes precedence when both are set.
 - `knowledge-agent` is included by default because the fork enhances its corpus

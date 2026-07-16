@@ -324,6 +324,36 @@ describe("OpenCode plugin event contract", () => {
     }
   });
 
+  it("injects worker context only once per OpenCode session", async () => {
+    const requestedInjectUrls: string[] = [];
+    let injectCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes("/api/context/inject")) {
+        requestedInjectUrls.push(path);
+        injectCount += 1;
+        return new Response(`dynamic memory context ${injectCount}`, { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const plugin = await ClaudeMemPlugin(mksOpenCodeCtx);
+      const firstOutput = { system: ["first opencode system prompt"] };
+      const secondOutput = { system: ["second opencode system prompt"] };
+
+      await plugin["experimental.chat.system.transform"]({ sessionID: "ses_mks" }, firstOutput);
+      await plugin["experimental.chat.system.transform"]({ sessionID: "ses_mks" }, secondOutput);
+
+      expect(firstOutput.system.join("\n")).toContain("dynamic memory context 1");
+      expect(secondOutput.system.join("\n")).not.toContain("dynamic memory context 2");
+      expect(requestedInjectUrls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("searches memory within the shared workspace project", async () => {
     const requestedUrls: string[] = [];
     const originalFetch = globalThis.fetch;

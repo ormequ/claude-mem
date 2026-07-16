@@ -94,6 +94,10 @@ interface SessionCompactingOutput {
   context?: string[];
 }
 
+interface ChatSystemTransformInput {
+  sessionID?: string;
+}
+
 interface ChatSystemTransformOutput {
   system?: string[];
 }
@@ -269,8 +273,13 @@ async function fetchInjectableContext(projectName: string): Promise<string | nul
   return `${MEMORY_CONTEXT_MARKER}\n${contextText}\n</claude-mem-context>`;
 }
 
+function getMemoryInjectionKey(input: ChatSystemTransformInput, projectName: string): string {
+  return input.sessionID ? `session:${input.sessionID}` : `project:${projectName}`;
+}
+
 export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
   const projectName = resolveProjectName(ctx);
+  const injectedMemoryContextKeys = new Set<string>();
 
   console.log(`[claude-mem] OpenCode plugin loading (project: ${projectName})`);
 
@@ -326,16 +335,22 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
     // Inject memory before each model call. OpenCode's chat.message hook only
     // observes messages after they exist; system.transform mutates LLM context.
     "experimental.chat.system.transform": async (
-      _input: Record<string, never>,
+      input: ChatSystemTransformInput,
       output: ChatSystemTransformOutput,
     ): Promise<void> => {
       if (!output?.system) return;
-      if (output.system.some((entry) => entry.includes(MEMORY_CONTEXT_MARKER))) return;
+      const injectionKey = getMemoryInjectionKey(input, projectName);
+      if (output.system.some((entry) => entry.includes(MEMORY_CONTEXT_MARKER))) {
+        injectedMemoryContextKeys.add(injectionKey);
+        return;
+      }
+      if (injectedMemoryContextKeys.has(injectionKey)) return;
 
       const contextText = await fetchInjectableContext(projectName);
       if (!contextText) return;
 
       output.system.push(contextText);
+      injectedMemoryContextKeys.add(injectionKey);
       console.log(
         `[claude-mem] Injected memory context (project: ${projectName}, chars: ${contextText.length})`,
       );
@@ -380,6 +395,7 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
         case "session.deleted": {
           contentSessionIdsByOpenCodeSessionId.delete(sessionID);
           initializedSessionIds.delete(sessionID);
+          injectedMemoryContextKeys.delete(`session:${sessionID}`);
           break;
         }
         default:

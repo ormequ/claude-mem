@@ -125,6 +125,15 @@ describe('Install Non-TTY Support', () => {
       expect(copyRegion).not.toContain("'.mcp.json'");
     });
 
+    it('filters extra bundled skills from the Claude Code plugin cache', () => {
+      const cacheCopyRegion = installSource.slice(
+        installSource.indexOf('function copyPluginToCache'),
+        installSource.indexOf('/**\n * Install marketplace dependencies'),
+      );
+
+      expect(cacheCopyRegion).toContain('filterClaudeMemSkillsInPluginRoot(cachePath)');
+    });
+
     it('validates the bundled plugin as the Codex marketplace source', () => {
       expect(codexInstallerSource).toContain("path.join('plugin', '.codex-plugin', 'plugin.json')");
       expect(codexInstallerSource).toContain("path.join('plugin', '.mcp.json')");
@@ -141,6 +150,33 @@ describe('Install Non-TTY Support', () => {
       // sync-managed override — the override mechanism itself remains.
       expect(gitignoreExcludeRegion).toContain('syncManagedFiles');
       expect(gitignoreExcludeRegion).toContain('syncManagedFiles.has(line)');
+    });
+
+    it('syncs the cache currently loaded by a mismatched worker version', () => {
+      const cacheSyncRegion = syncMarketplaceSource.slice(
+        syncMarketplaceSource.indexOf('const cacheVersionNames ='),
+        syncMarketplaceSource.indexOf('const pluginDir ='),
+      );
+
+      expect(cacheSyncRegion).toContain(
+        'const activeCacheVersion = getActiveCacheVersion(installedMismatch?.installedPath);',
+      );
+      expect(cacheSyncRegion).toContain('cacheVersionNames.add(activeCacheVersion);');
+    });
+
+    it('validates configured extra skills during marketplace sync', () => {
+      expect(syncMarketplaceSource).toContain('CLAUDE_MEM_INSTALL_EXTRA_SKILLS');
+      expect(syncMarketplaceSource).toContain('Unknown Claude-Mem extra skill');
+    });
+
+    it('preflights source skills before destructive marketplace sync', () => {
+      const preflightCall = "resolveAllowedSkills(path.join(rootDir, 'plugin', 'skills'));";
+      const preflightIndex = syncMarketplaceSource.indexOf(preflightCall);
+      const firstDestructiveRsyncIndex = syncMarketplaceSource.indexOf('rsync -av --delete');
+
+      expect(syncMarketplaceSource).toContain('function resolveAllowedSkills');
+      expect(preflightIndex).toBeGreaterThan(-1);
+      expect(preflightIndex).toBeLessThan(firstDestructiveRsyncIndex);
     });
 
     it('registers Codex against the durable marketplace directory', () => {

@@ -21,13 +21,46 @@ function resolveSkillSet() {
   return 'default';
 }
 
+// Mirror resolveClaudeMemExtraSkills() in SkillSelection.ts.
+function resolveExtraSkills() {
+  const configured = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS ?? '';
+  return [...new Set(configured.split(',').map((skill) => skill.trim()).filter(Boolean))];
+}
+
+// Resolve and validate the installed skill names without mutating the directory.
+function resolveAllowedSkills(skillsDir) {
+  const set = resolveSkillSet();
+  const extras = resolveExtraSkills();
+  const available = readdirSync(skillsDir)
+    .sort()
+    .filter((entry) => statSync(path.join(skillsDir, entry)).isDirectory());
+  const availableSet = new Set(available);
+  const unknown = extras.filter((skill) => !availableSet.has(skill));
+  if (unknown.length > 0) {
+    if (unknown.length === 1) {
+      throw new Error(
+        `Unknown Claude-Mem extra skill: ${unknown[0]}. Available bundled skills: ${available.join(', ')}`,
+      );
+    }
+    throw new Error(
+      `Unknown Claude-Mem extra skills: ${unknown.join(', ')}. Available bundled skills: ${available.join(', ')}`,
+    );
+  }
+
+  if (set === 'full') return null;
+
+  const preset = set === 'compact' ? COMPACT_CLAUDE_MEM_SKILLS : DEFAULT_CLAUDE_MEM_SKILLS;
+  return new Set([...preset, ...extras]);
+}
+
 // Mirror `npx claude-mem install` skill filtering: dev sync copies plugin/ wholesale,
 // so without this the marketplace/cache get all skills (e.g. /design-is) regardless.
 function filterSkills(skillsDir) {
-  const set = resolveSkillSet();
-  if (set === 'full') return;
   if (!existsSync(skillsDir)) return;
-  const allowed = new Set(set === 'compact' ? COMPACT_CLAUDE_MEM_SKILLS : DEFAULT_CLAUDE_MEM_SKILLS);
+
+  const allowed = resolveAllowedSkills(skillsDir);
+  if (allowed === null) return;
+
   for (const entry of readdirSync(skillsDir)) {
     const entryPath = path.join(skillsDir, entry);
     if (statSync(entryPath).isDirectory() && !allowed.has(entry)) {
@@ -142,6 +175,17 @@ function detectInstalledVersion(buildVersion) {
   return { installedVersion, installedPath };
 }
 
+function getActiveCacheVersion(installedPath) {
+  if (!installedPath) return null;
+
+  const cachePath = path.resolve(path.dirname(installedPath), '..');
+  if (path.dirname(cachePath) !== CACHE_BASE_PATH || !existsSync(cachePath)) {
+    return null;
+  }
+
+  return path.basename(cachePath);
+}
+
 const installedMismatch = detectInstalledVersion(getPluginVersion());
 if (installedMismatch) {
   console.log('');
@@ -161,6 +205,7 @@ if (installedMismatch) {
 console.log('Syncing to marketplace...');
 try {
   const rootDir = path.join(__dirname, '..');
+  resolveAllowedSkills(path.join(rootDir, 'plugin', 'skills'));
   const gitignoreExcludes = getGitignoreExcludes(rootDir);
 
   execSync(
@@ -184,6 +229,10 @@ try {
   const cacheVersionNames = new Set([version.replace(/\+/g, '-')]);
   if (existsSync(path.join(CACHE_BASE_PATH, version))) {
     cacheVersionNames.add(version);
+  }
+  const activeCacheVersion = getActiveCacheVersion(installedMismatch?.installedPath);
+  if (activeCacheVersion) {
+    cacheVersionNames.add(activeCacheVersion);
   }
 
   const pluginDir = path.join(rootDir, 'plugin');

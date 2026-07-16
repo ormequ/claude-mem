@@ -34,6 +34,7 @@ import {
 import { extractEresolveBlock, isEresolve, runNpmStrict } from '../install/npm-install-helper.js';
 import {
   filterClaudeMemSkillsDirectory,
+  filterClaudeMemSkillsInPluginRoot,
 } from '../../services/integrations/SkillSelection.js';
 
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
@@ -694,6 +695,7 @@ function copyPluginToCache(version: string): void {
   rmSync(cachePath, { recursive: true, force: true });
   ensureDirectoryExists(cachePath);
   cpSync(sourcePluginDirectory, cachePath, { recursive: true, force: true });
+  filterClaudeMemSkillsInPluginRoot(cachePath);
 }
 
 function writeMarketplaceInstallMarkers(

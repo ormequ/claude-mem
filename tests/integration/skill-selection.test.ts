@@ -7,6 +7,7 @@ import {
   DEFAULT_CLAUDE_MEM_SKILLS,
   claudeMemSkillAllowlist,
   filterClaudeMemSkillsDirectory,
+  filterClaudeMemSkillsInPluginRoot,
   resolveClaudeMemSkillSet,
   shouldInstallAllClaudeMemSkills,
 } from '../../src/services/integrations/SkillSelection';
@@ -23,6 +24,7 @@ describe('Skill selection', () => {
   const originalAllEnv = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
   const originalSetEnv = process.env.CLAUDE_MEM_SKILL_SET;
   const originalSmartToolsEnv = process.env.CLAUDE_MEM_SMART_TOOLS;
+  const originalExtraSkillsEnv = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
 
   beforeEach(() => {
     delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
@@ -31,6 +33,7 @@ describe('Skill selection', () => {
     // CLAUDE_MEM_SMART_TOOLS=false in the dev environment would otherwise
     // leak into every default-set assertion below.
     delete process.env.CLAUDE_MEM_SMART_TOOLS;
+    delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
     rmSync(tempDir, { recursive: true, force: true });
     mkdirSync(tempDir, { recursive: true });
   });
@@ -39,6 +42,11 @@ describe('Skill selection', () => {
     process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = originalAllEnv;
     process.env.CLAUDE_MEM_SKILL_SET = originalSetEnv;
     process.env.CLAUDE_MEM_SMART_TOOLS = originalSmartToolsEnv;
+    if (originalExtraSkillsEnv === undefined) {
+      delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    } else {
+      process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = originalExtraSkillsEnv;
+    }
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -158,6 +166,69 @@ describe('Skill selection', () => {
     expect(existsSync(join(skillsDir, 'timeline-report', 'SKILL.md'))).toBe(true);
   });
 
+  it('extends the compact set with trimmed, deduplicated extra skills', () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = ' weekly-digests, babysit, babysit, ';
+    const skillsDir = join(tempDir, 'skills');
+    writeSkill(skillsDir, 'knowledge-agent');
+    writeSkill(skillsDir, 'mem-search');
+    writeSkill(skillsDir, 'pathfinder');
+    writeSkill(skillsDir, 'timeline-report');
+    writeSkill(skillsDir, 'learn-codebase');
+    writeSkill(skillsDir, 'weekly-digests');
+    writeSkill(skillsDir, 'babysit');
+    writeSkill(skillsDir, 'standup');
+
+    const result = filterClaudeMemSkillsDirectory(skillsDir);
+
+    expect(result.filtered).toBe(true);
+    expect(result.set).toBe('compact');
+    expect(result.kept.sort()).toEqual([
+      'babysit',
+      'knowledge-agent',
+      'mem-search',
+      'pathfinder',
+      'timeline-report',
+      'weekly-digests',
+    ]);
+    expect(result.removed).toEqual(['learn-codebase', 'standup']);
+    expect(existsSync(join(skillsDir, 'knowledge-agent', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'mem-search', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'pathfinder', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'timeline-report', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'weekly-digests', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'babysit', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'standup'))).toBe(false);
+  });
+
+  it('rejects an unknown extra skill before removing compact-set exclusions', () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babisit';
+    const skillsDir = join(tempDir, 'skills');
+    writeSkill(skillsDir, 'standup');
+
+    expect(() => filterClaudeMemSkillsDirectory(skillsDir))
+      .toThrow('Unknown Claude-Mem extra skill: babisit');
+
+    expect(existsSync(join(skillsDir, 'standup', 'SKILL.md'))).toBe(true);
+  });
+
+  it('validates plural unknown extras before removing default-set exclusions', () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'default';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babisit,not-real';
+    const skillsDir = join(tempDir, 'skills');
+    for (const skill of DEFAULT_CLAUDE_MEM_SKILLS) {
+      writeSkill(skillsDir, skill);
+    }
+    writeSkill(skillsDir, 'wowerpoint');
+
+    expect(() => filterClaudeMemSkillsDirectory(skillsDir)).toThrow(
+      'Unknown Claude-Mem extra skills: babisit, not-real. Available bundled skills: how-it-works, knowledge-agent, learn-codebase, mem-search, pathfinder, smart-explore, standup, timeline-report, weekly-digests, wowerpoint',
+    );
+
+    expect(existsSync(join(skillsDir, 'wowerpoint', 'SKILL.md'))).toBe(true);
+  });
+
   it('full set keeps everything', () => {
     process.env.CLAUDE_MEM_SKILL_SET = 'full';
     const skillsDir = join(tempDir, 'skills');
@@ -170,5 +241,35 @@ describe('Skill selection', () => {
     expect(result.set).toBe('full');
     expect(result.removed).toEqual([]);
     expect(existsSync(join(skillsDir, 'wowerpoint', 'SKILL.md'))).toBe(true);
+  });
+
+  it('validates an unknown extra before retaining full-set skills', () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'full';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babisit';
+    const skillsDir = join(tempDir, 'skills');
+    writeSkill(skillsDir, 'wowerpoint');
+
+    expect(() => filterClaudeMemSkillsDirectory(skillsDir))
+      .toThrow('Unknown Claude-Mem extra skill: babisit');
+
+    expect(existsSync(join(skillsDir, 'wowerpoint', 'SKILL.md'))).toBe(true);
+  });
+
+  it('removes extra skills from a copied plugin cache root by default', () => {
+    const pluginRoot = join(tempDir, 'plugin-cache');
+    const skillsDir = join(pluginRoot, 'skills');
+    writeSkill(skillsDir, 'mem-search');
+    writeSkill(skillsDir, 'standup');
+    writeSkill(skillsDir, 'wowerpoint');
+
+    const result = filterClaudeMemSkillsInPluginRoot(pluginRoot);
+
+    expect(result.filtered).toBe(true);
+    expect(result.kept).toContain('mem-search');
+    expect(result.kept).toContain('standup');
+    expect(result.removed).toEqual(['wowerpoint']);
+    expect(existsSync(join(skillsDir, 'mem-search', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'standup', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillsDir, 'wowerpoint'))).toBe(false);
   });
 });
