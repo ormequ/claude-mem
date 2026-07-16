@@ -70,11 +70,11 @@ describe('Skill selection', () => {
     expect(claudeMemSkillAllowlist()).toContain('smart-explore');
   });
 
-  it('compact set is knowledge-agent + mem-search + learn-codebase', () => {
+  it('compact set is knowledge-agent + mem-search + pathfinder', () => {
     expect(COMPACT_CLAUDE_MEM_SKILLS).toEqual([
       'knowledge-agent',
       'mem-search',
-      'learn-codebase',
+      'pathfinder',
     ]);
   });
 
@@ -125,22 +125,22 @@ describe('Skill selection', () => {
     expect(existsSync(join(skillsDir, 'version-bump'))).toBe(false);
   });
 
-  it('compact set keeps only knowledge-agent, mem-search, learn-codebase', () => {
+  it('compact set keeps only knowledge-agent, mem-search, pathfinder', () => {
     process.env.CLAUDE_MEM_SKILL_SET = 'compact';
     const skillsDir = join(tempDir, 'skills');
     writeSkill(skillsDir, 'knowledge-agent');
     writeSkill(skillsDir, 'mem-search');
-    writeSkill(skillsDir, 'learn-codebase');
     writeSkill(skillsDir, 'pathfinder');
+    writeSkill(skillsDir, 'learn-codebase');
     writeSkill(skillsDir, 'standup');
 
     const result = filterClaudeMemSkillsDirectory(skillsDir);
 
     expect(result.filtered).toBe(true);
     expect(result.set).toBe('compact');
-    expect(result.kept.sort()).toEqual(['knowledge-agent', 'learn-codebase', 'mem-search']);
-    expect(result.removed).toEqual(['pathfinder', 'standup']);
-    expect(existsSync(join(skillsDir, 'pathfinder'))).toBe(false);
+    expect(result.kept.sort()).toEqual(['knowledge-agent', 'mem-search', 'pathfinder']);
+    expect(result.removed).toEqual(['learn-codebase', 'standup']);
+    expect(existsSync(join(skillsDir, 'learn-codebase'))).toBe(false);
     expect(existsSync(join(skillsDir, 'knowledge-agent', 'SKILL.md'))).toBe(true);
   });
 

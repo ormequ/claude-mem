@@ -23,13 +23,17 @@ export const DEFAULT_CLAUDE_MEM_SKILLS = [
 ] as const;
 
 /**
- * Compact set: only the essentials — memory search, codebase priming, and the
- * corpus Q&A agent.
+ * Compact set: memory retrieval core plus the one situational tool worth a
+ * permanent slot. `learn-codebase` was dropped — it brute-reads every file to
+ * front-load context, which `codegraph` (queried on demand) makes dead weight
+ * in an indexed repo. `pathfinder` (architecture audit before a refactor) takes
+ * its place: not "memory", but the heavy tool this fork's owner actually reaches
+ * for. Reports (`timeline-report`/`weekly-digests`) stay `full`-on-demand.
  */
 export const COMPACT_CLAUDE_MEM_SKILLS = [
   'knowledge-agent',
   'mem-search',
-  'learn-codebase',
+  'pathfinder',
 ] as const;
 
 export type SkillFilterResult = {

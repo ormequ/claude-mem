@@ -26,8 +26,14 @@ This fork keeps local claude-mem fixes in source control instead of patching
     - `mem-search`, `smart-explore`, `learn-codebase`, `how-it-works`,
       `timeline-report`, `weekly-digests`, `standup`, `pathfinder`,
       `knowledge-agent`
-  - `compact` — essentials only: `knowledge-agent`, `mem-search`,
-    `learn-codebase`
+  - `compact` — memory core + one situational tool: `knowledge-agent`,
+    `mem-search`, `pathfinder`. `learn-codebase` was dropped (2026-07-16): it
+    brute-reads every file to front-load context, which `codegraph` (queried on
+    demand) makes dead weight in an indexed repo. `pathfinder` (architecture
+    audit before a refactor) took its slot — not "memory", but the one heavy
+    tool actually reached for; the reports (`timeline-report`/`weekly-digests`)
+    stay `full`-on-demand because whole-history narrative is a run-once class,
+    not a compact essential.
   - `full` — every bundled skill (no filtering)
 - Legacy `CLAUDE_MEM_INSTALL_ALL_SKILLS=true` still maps to `full`;
   `CLAUDE_MEM_SKILL_SET` takes precedence when both are set.
