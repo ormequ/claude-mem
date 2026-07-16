@@ -2,7 +2,7 @@
 
 You are an agent installing the claude-mem fork for a human. Do not install
 silently with defaults — the defaults are wrong for this fork's typical user.
-Ask the three questions in step 1, then execute.
+Ask the four questions in step 1, then execute.
 
 `FORK_NOTES.md` is the authority on *why* these defaults differ; this file is
 the *how*. If the two disagree, FORK_NOTES wins and this file is stale — fix it.
@@ -15,7 +15,7 @@ the *how*. If the two disagree, FORK_NOTES wins and this file is stale — fix i
 
 ## 1. Ask the human first
 
-Ask all three before running anything. Do not guess.
+Ask all four before running anything. Do not guess.
 
 ### Q1 — Skill set
 
@@ -54,6 +54,17 @@ Offer this explicitly. Recommend **yes** whenever the repo is codegraph-indexed
 `smart_unfold` are the tree-sitter tools codegraph replaced, and the fork
 dropped the tree-sitter work entirely (FORK_NOTES "Dropped: smart-file-read").
 Left on, their schemas cost context on every session for nothing.
+
+### Q4 — Which model provider?
+
+The interactive installer asks this too (`Which memory provider do you want to
+use?`): `claude` (default) | `gemini` | `openrouter`. This picks what compresses
+every tool call into an observation, so it is a cost decision, not a taste one —
+it runs constantly in the background.
+
+Ask which the human wants, and whether they want a stronger model for
+knowledge-agent answers than for bulk compression (fork-only, OpenRouter path).
+Section 4 has the full option table and the keys.
 
 ## 2. Install
 
@@ -109,7 +120,82 @@ Two traps, both verified:
   leaves them registered, so the schemas still cost context. Removal from
   registration is the point.
 
-## 4. Verify — do not skip
+## 4. Models — options and configuration
+
+**Where these live: `~/.claude-mem/settings.json`, as flat top-level keys** (a
+nested `env` object is auto-migrated to flat on load). Unlike
+`CLAUDE_MEM_SMART_TOOLS` (section 3), every key below *is* in
+`SettingsDefaultsManager`'s `DEFAULTS` whitelist, so settings.json works for
+them. A real env var still overrides settings.json (`applyEnvOverrides`).
+
+### Provider
+
+`CLAUDE_MEM_PROVIDER` = `claude` (default) | `gemini` | `openrouter`
+
+| Provider | Keys | Notes |
+|---|---|---|
+| `claude` | `CLAUDE_MEM_MODEL` (default `claude-haiku-4-5-20251001`), `CLAUDE_MEM_CLAUDE_AUTH_METHOD` = `subscription` (default) \| `api-key` | `subscription` uses the logged-in Claude SDK account — no key needed |
+| `gemini` | `CLAUDE_MEM_GEMINI_API_KEY`, `CLAUDE_MEM_GEMINI_MODEL` (default `gemini-2.5-flash-lite`), `CLAUDE_MEM_GEMINI_RATE_LIMITING_ENABLED` (default `true`) | rate limiting defaults on for the free tier — leave it on unless paid |
+| `openrouter` | `CLAUDE_MEM_OPENROUTER_API_KEY`, `CLAUDE_MEM_OPENROUTER_MODEL` (default `xiaomi/mimo-v2-flash:free`), `CLAUDE_MEM_OPENROUTER_QA_MODEL`, `CLAUDE_MEM_OPENROUTER_BASE_URL` | the fork's `query_corpus` uses a plain `/chat/completions` request here, so corpus Q&A works with **no Claude OAuth at all** |
+
+### `$TIER` aliases — the portable way to name a model
+
+Instead of a concrete id, any model key may hold `$TIER:fast`, `$TIER:smart`,
+`$TIER:simple`, or `$TIER:summary`. Each resolves through a tier table:
+
+| Alias | Key | Default |
+|---|---|---|
+| `$TIER:fast` | `CLAUDE_MEM_TIER_FAST_MODEL` | `haiku` |
+| `$TIER:smart` | `CLAUDE_MEM_TIER_SMART_MODEL` | `sonnet` |
+| `$TIER:simple` | `CLAUDE_MEM_TIER_SIMPLE_MODEL` | `haiku` |
+| `$TIER:summary` | `CLAUDE_MEM_TIER_SUMMARY_MODEL` | empty → falls back to `CLAUDE_MEM_MODEL` |
+
+Two properties worth knowing (`src/services/worker/model-aliases.ts`):
+
+- **Resolution happens at request time, not settings-load time** — the human can
+  retune models by editing settings.json with **no worker restart**.
+- Anything that is not a `$TIER:*` string passes through untouched, so concrete
+  ids and aliases mix freely.
+
+`CLAUDE_MEM_TIER_ROUTING_ENABLED` (default `true`) additionally routes
+observations to models by complexity.
+
+### Fork-only: a stronger model for knowledge-agent answers
+
+`CLAUDE_MEM_OPENROUTER_QA_MODEL` splits corpus Q&A off the bulk model. Bulk
+observation/summary generation runs constantly and belongs on something cheap;
+corpus *answers* are rare and are exactly where a weak model hallucinates. So:
+
+```jsonc
+// ~/.claude-mem/settings.json
+{
+  "CLAUDE_MEM_PROVIDER": "openrouter",
+  "CLAUDE_MEM_OPENROUTER_API_KEY": "sk-or-…",
+  "CLAUDE_MEM_OPENROUTER_MODEL": "xiaomi/mimo-v2-flash:free",  // bulk — cheap
+  "CLAUDE_MEM_OPENROUTER_QA_MODEL": "$TIER:smart"              // answers — strong
+}
+```
+
+Resolution order (`resolveOpenRouterQaModel`): QA key → `$TIER` resolution →
+falls back to `CLAUDE_MEM_OPENROUTER_MODEL` → then the free-tier default. Empty
+is safe: it just reuses the bulk model (upstream behavior).
+
+### Custom OpenAI-compatible endpoints
+
+`CLAUDE_MEM_OPENROUTER_BASE_URL` accepts any OpenAI-compatible base URL —
+DeepSeek (`https://api.deepseek.com`), a local server
+(`http://localhost:1234/v1`), a gateway. Empty means real OpenRouter.
+`CLAUDE_MEM_OPENROUTER_SITE_URL` / `CLAUDE_MEM_OPENROUTER_APP_NAME` are
+OpenRouter analytics only.
+
+⚠ Not every "OpenAI-compatible" endpoint really is. The Z.AI coding endpoint
+**silently ignores `response_format: json_schema`** — it returns 200 with
+unconstrained text rather than erroring, so constrained decoding is simply not
+available there (this is why the fork filters concepts at the parser instead;
+FORK_NOTES, `src/sdk/parser.ts`). Expect to verify, not assume, on a new
+endpoint.
+
+## 5. Verify — do not skip
 
 Check the installed skills directory, not the build log. A failed `bun install`
 aborts the sync **before** skill filtering and silently leaves all 18 skills.
@@ -127,7 +213,7 @@ Then tell the human to **restart Claude Code**. The skill set and the
 `smart_*` removal only take effect in a new session: the running MCP server
 holds the old environment.
 
-## 5. Post-install smoke test
+## 6. Post-install smoke test
 
 - `observation_add` with `projectId: "MKS"`
 - `memory_search` with a fresh marker
