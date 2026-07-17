@@ -183,6 +183,14 @@ differ; INSTALL_FORK.md is the *how*.
   Note a `permissions.deny` on the `smart_*` tools is **not** equivalent — it
   blocks calls but leaves the tools registered, so their schemas still cost
   context. Removal from registration is the point.
+  **Any test asserting the `default` skill set must `delete
+  process.env.CLAUDE_MEM_SMART_TOOLS` in `beforeEach` and restore it after.**
+  A dev box that sets the gate in `~/.claude/settings.json` has it propagated
+  into the test env by Claude Code, so `smart-explore` is absent from the
+  default set and the assertion fails locally while passing in CI — a
+  developer-only red that reads as a real break. Bit
+  `skill-selection.test.ts` first and `opencode-installer.test.ts` again on
+  2026-07-17.
 
 - `src/sdk/parser.ts` enforces the active mode's `observation_concepts`
   vocabulary at parse time (`filterConcepts`, `recordConceptDrops`, and the

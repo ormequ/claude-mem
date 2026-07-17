@@ -20,6 +20,7 @@ describe('OpenCode installer config registration', () => {
   let previousInstallAllSkills: string | undefined;
   let previousSkillSet: string | undefined;
   let previousInstallExtraSkills: string | undefined;
+  let previousSmartTools: string | undefined;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `opencode-installer-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -29,11 +30,18 @@ describe('OpenCode installer config registration', () => {
     previousInstallAllSkills = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
     previousSkillSet = process.env.CLAUDE_MEM_SKILL_SET;
     previousInstallExtraSkills = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    previousSmartTools = process.env.CLAUDE_MEM_SMART_TOOLS;
     process.env.OPENCODE_CONFIG_DIR = tempDir;
     process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'claude');
     delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
     delete process.env.CLAUDE_MEM_SKILL_SET;
     delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    // These cases assert the DEFAULT skill set, which includes smart-explore.
+    // CLAUDE_MEM_SMART_TOOLS=false drops it (fork gate), and this machine sets
+    // that in ~/.claude/settings.json — Claude Code propagates it into the test
+    // env, so without this the default-set assertions fail locally and pass in
+    // CI. Same isolation as tests/integration/skill-selection.test.ts.
+    delete process.env.CLAUDE_MEM_SMART_TOOLS;
   });
 
   afterEach(() => {
@@ -56,6 +64,11 @@ describe('OpenCode installer config registration', () => {
       delete process.env.CLAUDE_MEM_SKILL_SET;
     } else {
       process.env.CLAUDE_MEM_SKILL_SET = previousSkillSet;
+    }
+    if (previousSmartTools === undefined) {
+      delete process.env.CLAUDE_MEM_SMART_TOOLS;
+    } else {
+      process.env.CLAUDE_MEM_SMART_TOOLS = previousSmartTools;
     }
     if (previousInstallExtraSkills === undefined) {
       delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
