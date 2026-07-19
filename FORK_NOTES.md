@@ -159,11 +159,12 @@ differ; INSTALL_FORK.md is the *how*.
   observation enqueue, upstream, one line) is a per-tool-call hot path; a
   known cwd costs one Set lookup and no I/O. Adoption resolves lazily, as it
   already did. Dead paths (removed worktrees) are pruned on write.
-  Note the retry itself was always correct and is what heals a failed Chroma
-  patch: the select deliberately re-picks already-merged rows
-  (`merged_into_project IS NULL OR merged_into_project = ?`), so a run whose
-  Chroma half failed is repaired by the next run that actually happens — which
-  is precisely what discovery was starving.
+  (Historical note: this discovery bug used to also starve the Chroma retry,
+  because adoption patched Chroma inline and relied on the next scan to repair a
+  failed patch. Since 2026-07-19 Chroma patching is a durable SQLite-flag drain
+  independent of worktree discovery — see "Chroma merge-patch" below — so a
+  starved tick no longer loses Chroma updates, only delays SQLite adoption of
+  newly-merged branches.)
 - `CLAUDE_MEM_SMART_TOOLS=false|0` removes `smart_search`/`smart_unfold`/
   `smart_outline` from MCP registration (both ListTools and CallTool) and drops
   `smart-explore` from the default skill set. Default: enabled (upstream
@@ -309,27 +310,44 @@ is lost):
 If this recurs a third time, automate it (subprocess-death counter →
 quarantine + rebuild); until then the manual ritual is cheaper than the code.
 
-## Gotcha: `adopt` from the CLI while the worker is running
+## Chroma merge-patch: SQLite flag drained by the worker (2026-07-19)
 
-The CLI `adopt` command runs in its OWN process, so its `ChromaSync` builds a
-fresh `ChromaMcpManager` and tries to open a second persistent writer over
-`~/.claude-mem/chroma`. The writer-lock guard correctly refuses:
-`Chroma data dir … is already owned by PID <worker>; refusing to start a second
-writer`. The SQL half still commits, so the run reports
-`chromaUpdates=0, chromaFailed=N` and the printed "will retry on next run" is
-the honest path — but only the WORKER's own passes can do that retry.
+Adoption no longer writes to Chroma at all. It only sets `merged_into_project`
+in SQLite and resets a `chroma_merge_synced_at` flag (added to `observations`
+and `session_summaries`) to NULL, which enqueues the row. The worker patches
+Chroma from that queue via `drainChromaMergeQueue`
+(`src/services/sync/ChromaMergeDrain.ts`, fork-owned) — on startup and after
+each `AdoptionScheduler` tick, in the ONE process that holds the Chroma
+single-writer lock.
 
-In-worker adoption never hits this: `ChromaMcpManager` is a per-process
-singleton (`getInstance()`), and `acquireChromaWriterLock` early-returns when
-the same `dataDir` lock is already held, so the boot/hourly passes reuse the
-live connection. Do NOT "fix" this by relaxing the pid/ownerId check in
-`ChromaMcpManager` — a second manager in one process would spawn a second
-chroma-mcp over the same store, which is the 2026-07-11 multi-instance
-incident the lock exists to prevent.
+Why this replaced the old "adoption patches Chroma directly, CLI retries via
+worker" design:
 
-To force an immediate full adoption including the Chroma patch: stop the
-worker, run `adopt`, start the worker. Otherwise just let the hourly tick do
-it (see the registry note above — that tick only became real on 2026-07-16).
+- The CLI `adopt` command runs in its OWN process, so its `ChromaSync` built a
+  fresh `ChromaMcpManager` and tried to open a second persistent writer over
+  `~/.claude-mem/chroma`. The writer-lock guard correctly refused
+  (`Chroma data dir … is already owned by PID <worker>; refusing to start a
+  second writer`), so every CLI adopt printed a scary `chromaFailed=N`. Do NOT
+  "fix" that by relaxing the pid/ownerId check in `ChromaMcpManager` — a second
+  manager in one process spawns a second chroma-mcp over the same store, the
+  2026-07-11 multi-instance incident the lock exists to prevent.
+- The old retry re-derived the patch set by re-scanning git worktrees
+  (`merged_into_project IS NULL OR merged_into_project = ?`). If the worktree
+  was deleted right after `adopt_mem` (before the hourly tick), the scan no
+  longer found it as a target and those rows stayed unpatched in Chroma
+  forever. The flag is durable SQLite state, so deletion can't strand rows.
+
+Properties of the drain: patches by `sqlite_id` AND `doc_type` (obs vs summary
+ids collide in the single `cm__claude-mem` collection); stamps the flag only
+after a chunk's Chroma patch succeeds (resumable — a mid-run failure keeps
+patched chunks stamped and leaves the rest NULL for the next tick); rows whose
+flag defaults to NULL after the column migration are picked up automatically,
+so the first run backfills all pre-existing merged rows. Chroma is a derived
+cache, so a redundant no-op patch (row merged before its first Chroma sync) is
+harmless — the normal insert path already carries `merged_into_project`.
+
+The CLI adopt output now prints `Chroma patch: N rows queued (worker patches on
+next drain)` instead of the old updated/failed counters.
 
 ## Upgrade checklist
 

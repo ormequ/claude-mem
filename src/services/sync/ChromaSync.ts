@@ -987,7 +987,8 @@ export class ChromaSync {
 
   async updateMergedIntoProject(
     sqliteIds: number[],
-    mergedIntoProject: string
+    mergedIntoProject: string,
+    docType?: 'observation' | 'session_summary' | 'user_prompt'
   ): Promise<void> {
     if (sqliteIds.length === 0) return;
 
@@ -999,9 +1000,17 @@ export class ChromaSync {
     for (let i = 0; i < sqliteIds.length; i += this.BATCH_SIZE) {
       const idBatch = sqliteIds.slice(i, i + this.BATCH_SIZE);
 
+      // sqlite_id is unique only WITHIN a doc_type — an observation and a
+      // session_summary can share the same integer id and collide in this one
+      // collection. Filter by doc_type when the caller knows which table the
+      // ids came from.
+      const where = docType
+        ? { $and: [{ sqlite_id: { $in: idBatch } }, { doc_type: docType }] }
+        : { sqlite_id: { $in: idBatch } };
+
       const existing = await chromaMcp.callTool('chroma_get_documents', {
         collection_name: this.collectionName,
-        where: { sqlite_id: { $in: idBatch } },
+        where,
         include: ['metadatas']
       }) as { ids?: string[]; metadatas?: Array<Record<string, any> | null> };
 

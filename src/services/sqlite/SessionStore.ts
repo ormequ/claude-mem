@@ -1303,6 +1303,10 @@ export class SessionStore {
       'CREATE INDEX IF NOT EXISTS idx_observations_merged_into ON observations(merged_into_project)'
     );
 
+    if (!obsCols.some(c => c.name === 'chroma_merge_synced_at')) {
+      this.db.run('ALTER TABLE observations ADD COLUMN chroma_merge_synced_at INTEGER');
+    }
+
     const sumCols = this.db
       .query('PRAGMA table_info(session_summaries)')
       .all() as TableColumnInfo[];
@@ -1311,6 +1315,23 @@ export class SessionStore {
     }
     this.db.run(
       'CREATE INDEX IF NOT EXISTS idx_summaries_merged_into ON session_summaries(merged_into_project)'
+    );
+    if (!sumCols.some(c => c.name === 'chroma_merge_synced_at')) {
+      this.db.run('ALTER TABLE session_summaries ADD COLUMN chroma_merge_synced_at INTEGER');
+    }
+
+    // Partial indexes for ChromaMergeDrain: rows adopted into a parent project
+    // (merged_into_project set) whose Chroma mirror hasn't been patched yet
+    // (chroma_merge_synced_at NULL). The CLI adopt path can't take the Chroma
+    // writer lock, so it only flags rows here; the worker drains them. See
+    // src/services/sync/ChromaMergeDrain.ts and FORK_NOTES.md.
+    this.db.run(
+      `CREATE INDEX IF NOT EXISTS idx_observations_merge_unsynced ON observations(id)
+         WHERE merged_into_project IS NOT NULL AND chroma_merge_synced_at IS NULL`
+    );
+    this.db.run(
+      `CREATE INDEX IF NOT EXISTS idx_summaries_merge_unsynced ON session_summaries(id)
+         WHERE merged_into_project IS NOT NULL AND chroma_merge_synced_at IS NULL`
     );
   }
 

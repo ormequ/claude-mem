@@ -4,7 +4,6 @@ import { existsSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { logger } from '../../utils/logger.js';
 import { getProjectContext } from '../../utils/project-name.js';
-import { ChromaSync } from '../sync/ChromaSync.js';
 import { paths } from '../../shared/paths.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { listKnownCwds, recordCwd } from './KnownCwdRegistry.js';
@@ -18,8 +17,12 @@ export interface AdoptionResult {
   mergedBranches: string[];
   adoptedObservations: number;
   adoptedSummaries: number;
-  chromaUpdates: number;
-  chromaFailed: number;
+  /**
+   * Rows flagged (chroma_merge_synced_at = NULL) for the worker's
+   * ChromaMergeDrain to patch. Adoption no longer writes to Chroma directly —
+   * the CLI adopt process can't take the single-writer lock the worker holds.
+   */
+  chromaQueued: number;
   dryRun: boolean;
   errors: Array<{ worktree: string; error: string }>;
 }
@@ -157,8 +160,7 @@ export async function adoptMergedWorktrees(opts: {
     mergedBranches: [],
     adoptedObservations: 0,
     adoptedSummaries: 0,
-    chromaUpdates: 0,
-    chromaFailed: 0,
+    chromaQueued: 0,
     dryRun,
     errors: []
   };
@@ -202,8 +204,6 @@ export async function adoptMergedWorktrees(opts: {
     return result;
   }
 
-  const adoptedSqliteIds: number[] = [];
-
   let db: import('bun:sqlite').Database | null = null;
   try {
     db = openConfiguredSqliteDatabase(dbPath);
@@ -226,30 +226,32 @@ export async function adoptMergedWorktrees(opts: {
       return result;
     }
 
-    const selectObsForPatch = db.prepare(
-      `SELECT id FROM observations
-       WHERE project = ?
-         AND (merged_into_project IS NULL OR merged_into_project = ?)`
-    );
+    // Adoption only marks rows in SQLite; the worker's ChromaMergeDrain patches
+    // Chroma (it holds the single-writer lock the CLI adopt process can't take).
+    // Resetting chroma_merge_synced_at to NULL enqueues the row for that drain.
+    // Older fork DBs may have merged_into_project but not yet the flag column —
+    // fall back to a flagless UPDATE there; the migration adds the column and a
+    // later pass re-runs the drain against the still-NULL default.
+    const obsHasFlag = obsColumns.some(c => c.name === 'chroma_merge_synced_at');
+    const sumHasFlag = sumColumns.some(c => c.name === 'chroma_merge_synced_at');
     const updateObs = db.prepare(
-      'UPDATE observations SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL'
+      obsHasFlag
+        ? 'UPDATE observations SET merged_into_project = ?, chroma_merge_synced_at = NULL WHERE project = ? AND merged_into_project IS NULL'
+        : 'UPDATE observations SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL'
     );
     const updateSum = db.prepare(
-      'UPDATE session_summaries SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL'
+      sumHasFlag
+        ? 'UPDATE session_summaries SET merged_into_project = ?, chroma_merge_synced_at = NULL WHERE project = ? AND merged_into_project IS NULL'
+        : 'UPDATE session_summaries SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL'
     );
 
     const adoptWorktreeInTransaction = (wt: WorktreeEntry) => {
       const worktreeProject = getProjectContext(wt.path).primary;
-      const rows = selectObsForPatch.all(
-        worktreeProject,
-        parentProject
-      ) as Array<{ id: number }>;
-
       const obsChanges = updateObs.run(parentProject, worktreeProject).changes;
       const sumChanges = updateSum.run(parentProject, worktreeProject).changes;
-      for (const r of rows) adoptedSqliteIds.push(r.id);
       result.adoptedObservations += obsChanges;
       result.adoptedSummaries += sumChanges;
+      result.chromaQueued += obsChanges + sumChanges;
     };
 
     const tx = db.transaction(() => {
@@ -288,34 +290,14 @@ export async function adoptMergedWorktrees(opts: {
     db?.close();
   }
 
-  if (!dryRun && adoptedSqliteIds.length > 0) {
-    const chromaSync = new ChromaSync('claude-mem');
-    try {
-      await chromaSync.updateMergedIntoProject(adoptedSqliteIds, parentProject);
-      result.chromaUpdates = adoptedSqliteIds.length;
-    } catch (err) {
-      if (err instanceof Error) {
-        logger.error(
-          'SYSTEM',
-          'Worktree adoption Chroma patch failed (SQL already committed)',
-          { parentProject, sqliteIdCount: adoptedSqliteIds.length },
-          err
-        );
-      } else {
-        logger.error(
-          'SYSTEM',
-          'Worktree adoption Chroma patch failed (SQL already committed)',
-          { parentProject, sqliteIdCount: adoptedSqliteIds.length, error: String(err) }
-        );
-      }
-      result.chromaFailed = adoptedSqliteIds.length;
-    }
-  }
+  // Chroma is patched asynchronously by the worker's ChromaMergeDrain, which
+  // reads the chroma_merge_synced_at = NULL flag this function set. Adoption
+  // never opens a Chroma writer of its own.
 
   if (
     result.adoptedObservations > 0 ||
     result.adoptedSummaries > 0 ||
-    result.chromaUpdates > 0 ||
+    result.chromaQueued > 0 ||
     result.errors.length > 0
   ) {
     logger.info('SYSTEM', 'Worktree adoption applied', {
@@ -325,8 +307,7 @@ export async function adoptMergedWorktrees(opts: {
       mergedBranches: result.mergedBranches,
       adoptedObservations: result.adoptedObservations,
       adoptedSummaries: result.adoptedSummaries,
-      chromaUpdates: result.chromaUpdates,
-      chromaFailed: result.chromaFailed,
+      chromaQueued: result.chromaQueued,
       errors: result.errors.length
     });
   }

@@ -57,6 +57,7 @@ import {
 import { performGracefulShutdown } from './infrastructure/GracefulShutdown.js';
 import { adoptMergedWorktrees, adoptMergedWorktreesForAllKnownRepos } from './infrastructure/WorktreeAdoption.js';
 import { startPeriodicAdoption } from './infrastructure/AdoptionScheduler.js';
+import { drainChromaMergeQueue } from './sync/ChromaMergeDrain.js';
 
 import { Server } from './server/Server.js';
 import { BetterAuthRoutes } from '../server/auth/BetterAuthRoutes.js';
@@ -477,7 +478,7 @@ export class WorkerService implements WorkerRef {
       adoptMergedWorktreesForAllKnownRepos({}).then(adoptions => {
         if (adoptions) {
           for (const adoption of adoptions) {
-            if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.chromaUpdates > 0) {
+            if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.chromaQueued > 0) {
               logger.info('SYSTEM', 'Merged worktrees adopted in background', adoption);
             }
             if (adoption.errors.length > 0) {
@@ -494,7 +495,9 @@ export class WorkerService implements WorkerRef {
 
       // FORK: the worker lives for weeks, so a branch merged between restarts
       // stayed invisible to parent-project queries until someone ran `adopt`.
-      startPeriodicAdoption();
+      // The drain runner is lazy — the first tick fires an hour out, long after
+      // dbManager.initialize() below, so it safely reads the live connection.
+      startPeriodicAdoption(undefined, undefined, () => this.runChromaMergeDrain());
 
       const chromaEnabled = settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
       if (chromaEnabled) {
@@ -506,6 +509,14 @@ export class WorkerService implements WorkerRef {
 
       logger.info('WORKER', 'Initializing database manager...');
       await this.dbManager.initialize();
+
+      // Patch any rows the CLI adopt path (or a prior worker) only flagged in
+      // SQLite. Backfills history on first run after the migration. Detached so
+      // a slow/blocked Chroma can't hold up worker startup.
+      this.runChromaMergeDrain().catch(err => {
+        logger.warn('CHROMA_SYNC', 'Startup Chroma merge drain failed', {},
+          err instanceof Error ? err : new Error(String(err)));
+      });
 
       runOneTimeV12_4_3Cleanup();
 
@@ -627,6 +638,18 @@ export class WorkerService implements WorkerRef {
     } catch (error) {
       logger.error('SYSTEM', 'Background initialization failed', {}, error instanceof Error ? error : undefined);
     }
+  }
+
+  /**
+   * Patch merged_into_project into Chroma for rows the adopt path only flagged
+   * in SQLite (chroma_merge_synced_at IS NULL). Runs in the worker, which holds
+   * the Chroma single-writer lock. No-op when Chroma is disabled or the DB isn't
+   * initialized yet.
+   */
+  private async runChromaMergeDrain(): Promise<void> {
+    const chromaSync = this.dbManager.getChromaSync();
+    if (!chromaSync) return;
+    await drainChromaMergeQueue(this.dbManager.getConnection(), chromaSync);
   }
 
   private async runMcpSelfCheck(mcpServerPath: string): Promise<void> {
@@ -1337,9 +1360,10 @@ async function main() {
       console.log(`  Merged branches:      ${result.mergedBranches.join(', ') || '(none)'}`);
       console.log(`  Observations adopted: ${result.adoptedObservations}`);
       console.log(`  Summaries adopted:    ${result.adoptedSummaries}`);
-      console.log(`  Chroma docs updated:  ${result.chromaUpdates}`);
-      if (result.chromaFailed > 0) {
-        console.log(`  Chroma sync failures: ${result.chromaFailed} (will retry on next run)`);
+      if (result.dryRun) {
+        console.log(`  Chroma patch:         ${result.chromaQueued} rows would be queued`);
+      } else {
+        console.log(`  Chroma patch:         ${result.chromaQueued} rows queued (worker patches on next drain)`);
       }
       for (const err of result.errors) {
         console.log(`  ! ${err.worktree}: ${err.error}`);
