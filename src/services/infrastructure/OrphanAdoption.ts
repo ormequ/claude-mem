@@ -13,7 +13,7 @@
 // WorktreeAdoption.ts:188-190), so the tool presents facts and a human
 // approves.
 import path from 'path';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { paths } from '../../shared/paths.js';
 import { getProjectContext } from '../../utils/project-name.js';
@@ -198,4 +198,69 @@ export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } 
     skipped: result.skipped.length,
   });
   return result;
+}
+
+const DECISIONS_BASENAME = 'orphan-decisions.json';
+
+interface DeclineEntry {
+  project: string;
+  at: string;
+}
+
+function decisionsPath(dataDirectory?: string): string {
+  return path.join(dataDirectory ?? paths.dataDir(), 'state', DECISIONS_BASENAME);
+}
+
+/** project -> ISO timestamp the decline was recorded. */
+export function readDeclines(dataDirectory?: string): Map<string, string> {
+  const file = decisionsPath(dataDirectory);
+  const map = new Map<string, string>();
+  try {
+    if (!existsSync(file)) return map;
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { declined?: DeclineEntry[] };
+    for (const entry of parsed?.declined ?? []) {
+      if (entry && typeof entry.project === 'string' && typeof entry.at === 'string') {
+        map.set(entry.project, entry.at);
+      }
+    }
+  } catch (error: unknown) {
+    // Fail open: a corrupt file must re-ask, never silently hide an orphan.
+    logger.debug('SYSTEM', 'Orphan decisions unreadable, treating as empty', {
+      file,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new Map();
+  }
+  return map;
+}
+
+function writeDeclines(entries: Map<string, string>, dataDirectory?: string): void {
+  const file = decisionsPath(dataDirectory);
+  mkdirSync(path.dirname(file), { recursive: true });
+  const payload = {
+    declined: [...entries].map(([project, at]) => ({ project, at })),
+    updatedAt: new Date().toISOString(),
+  };
+  writeFileSync(file, JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+export function recordDecline(project: string, dataDirectory?: string): void {
+  const entries = readDeclines(dataDirectory);
+  entries.set(project, new Date().toISOString());
+  writeDeclines(entries, dataDirectory);
+}
+
+export function resetDeclines(dataDirectory?: string): void {
+  writeDeclines(new Map(), dataDirectory);
+}
+
+/**
+ * A decline holds only until the project gains rows newer than it. That keeps
+ * a reused worktree name from inheriting an old `n`, and makes rows written
+ * after an adopt (compression lag) surface again rather than vanish.
+ */
+export function isSuppressed(candidate: OrphanCandidate, declines: Map<string, string>): boolean {
+  const declinedAt = declines.get(candidate.project);
+  if (!declinedAt) return false;
+  return candidate.lastSeen <= declinedAt;
 }

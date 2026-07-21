@@ -4,7 +4,11 @@ import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
-import { scanOrphans } from '../../../src/services/infrastructure/OrphanAdoption.js';
+import {
+  scanOrphans,
+  readDeclines, recordDecline, resetDeclines, isSuppressed,
+  type OrphanCandidate,
+} from '../../../src/services/infrastructure/OrphanAdoption.js';
 
 const tempRoots: string[] = [];
 
@@ -215,5 +219,57 @@ describe('scanOrphans', () => {
     const result = scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans).toEqual([]);
+  });
+});
+
+describe('decline store', () => {
+  const candidate = (project: string, lastSeen: string): OrphanCandidate => ({
+    project, parentProject: 'demo', observations: 1, summaries: 0,
+    firstSeen: lastSeen, lastSeen,
+  });
+
+  it('suppresses a declined project whose rows are all older than the decline', () => {
+    const dataDir = makeDataDir([]);
+    recordDecline('demo/old-thing', dataDir);
+    const declines = readDeclines(dataDir);
+
+    expect(isSuppressed(candidate('demo/old-thing', '2020-01-01T00:00:00.000Z'), declines)).toBe(true);
+  });
+
+  it('re-surfaces a declined project once newer rows appear', () => {
+    // Worktree names are reused (api-reanimation, dropdown-primevue are not
+    // random). A decline keyed only by name would permanently hide the memory
+    // of a NEW worktree that happens to reuse the name.
+    const dataDir = makeDataDir([]);
+    recordDecline('demo/reused-name', dataDir);
+    const declines = readDeclines(dataDir);
+
+    expect(isSuppressed(candidate('demo/reused-name', '2099-01-01T00:00:00.000Z'), declines)).toBe(false);
+  });
+
+  it('does not suppress a project that was never declined', () => {
+    const dataDir = makeDataDir([]);
+    const declines = readDeclines(dataDir);
+
+    expect(isSuppressed(candidate('demo/fresh', '2026-07-20T00:00:00.000Z'), declines)).toBe(false);
+  });
+
+  it('resetDeclines clears every decline', () => {
+    const dataDir = makeDataDir([]);
+    recordDecline('demo/a', dataDir);
+    recordDecline('demo/b', dataDir);
+    resetDeclines(dataDir);
+
+    expect(readDeclines(dataDir).size).toBe(0);
+  });
+
+  it('treats a corrupt decline file as empty (fail-open)', () => {
+    // Asking once too often is safe; silently hiding an orphan is the failure
+    // this whole tool exists to prevent.
+    const dataDir = makeDataDir([]);
+    mkdirSync(path.join(dataDir, 'state'), { recursive: true });
+    writeFileSync(path.join(dataDir, 'state', 'orphan-decisions.json'), '{ not json', 'utf-8');
+
+    expect(readDeclines(dataDir).size).toBe(0);
   });
 });
