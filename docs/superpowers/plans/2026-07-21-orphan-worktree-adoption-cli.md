@@ -683,7 +683,7 @@ export function isSuppressed(candidate: OrphanCandidate, declines: Map<string, s
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/services/infrastructure/orphan-adoption.test.ts`
-Expected: PASS — 12 pass, 0 fail
+Expected: PASS — 0 fail, and the 5 new `decline store` cases all present in the output. (Do not assert an absolute total: earlier tasks' review loops add cases, so a hardcoded count goes stale. Verify no failures and that your own cases ran.)
 
 - [ ] **Step 5: Commit**
 
@@ -833,7 +833,7 @@ export function adoptOrphan(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/services/infrastructure/orphan-adoption.test.ts`
-Expected: PASS — 15 pass, 0 fail
+Expected: PASS — 0 fail, and the 3 new `adoptOrphan` cases all present in the output. (Do not assert an absolute total; earlier tasks' review loops add cases.)
 
 - [ ] **Step 5: Commit**
 
