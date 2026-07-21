@@ -34,7 +34,7 @@ if (doReset) {
     console.log('Cleared all recorded declines.');
   } else {
     const count = readDeclines().size;
-    console.log(`(no TTY or --dry-run: would clear ${count} recorded decline${count === 1 ? '' : 's'})`);
+    console.log(`(no TTY or --dry-run: would clear ${count} recorded decline${count === 1 ? '' : 's'} (all projects, not only those listed below))`);
   }
 }
 
@@ -43,7 +43,25 @@ const day = (iso: string) => iso.slice(0, 10);
 const line = (c: OrphanCandidate) =>
   `  ${c.project.padEnd(38)} ${String(total(c)).padStart(5)} rows   ${day(c.firstSeen)} – ${day(c.lastSeen)}`;
 
-const result = scanOrphans({ repoPath });
+// The worker writes to the same SQLite DB on every observation ingest.
+// Opening a connection re-asserts `PRAGMA journal_mode = WAL`; if the DB is
+// ever not already in WAL mode when a writer holds it, that pragma is a
+// genuine mode change and throws SQLITE_BUSY. Surface the same plain-language
+// message the adopt loop below uses instead of letting a raw stack trace kill
+// this read-only scan — this must never look like a clean run, so it exits
+// non-zero.
+let result: ReturnType<typeof scanOrphans>;
+try {
+  result = scanOrphans({ repoPath });
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('database is locked')) {
+    console.error(`! the claude-mem worker is busy writing; try again in a moment (${message})`);
+  } else {
+    console.error(`! could not scan for orphaned worktrees: ${message}`);
+  }
+  process.exit(1);
+}
 const declines = readDeclines();
 const pending = result.orphans.filter(c => !isSuppressed(c, declines));
 
