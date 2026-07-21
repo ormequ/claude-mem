@@ -43,13 +43,15 @@ const day = (iso: string) => iso.slice(0, 10);
 const line = (c: OrphanCandidate) =>
   `  ${c.project.padEnd(38)} ${String(total(c)).padStart(5)} rows   ${day(c.firstSeen)} – ${day(c.lastSeen)}`;
 
-// The worker writes to the same SQLite DB on every observation ingest.
-// Opening a connection re-asserts `PRAGMA journal_mode = WAL`; if the DB is
-// ever not already in WAL mode when a writer holds it, that pragma is a
-// genuine mode change and throws SQLITE_BUSY. Surface the same plain-language
-// message the adopt loop below uses instead of letting a raw stack trace kill
-// this read-only scan — this must never look like a clean run, so it exits
-// non-zero.
+// scanOrphans opens the SQLite DB read-only. `PRAGMA journal_mode = WAL` on
+// that open is a no-op when the DB is already WAL (which it always is in
+// production — the worker maintains it) and does not contend for the
+// worker's write lock, so this is not a crash reachable in normal
+// operation. But if scanOrphans ever does throw for any reason, a read-only
+// command shouldn't die with a raw Bun stack trace — surface the same
+// plain-language "database is locked" message the adopt loop below uses for
+// that specific error, and a generic one otherwise, and exit non-zero so a
+// failed run never looks like a clean one.
 let result: ReturnType<typeof scanOrphans>;
 try {
   result = scanOrphans({ repoPath });
