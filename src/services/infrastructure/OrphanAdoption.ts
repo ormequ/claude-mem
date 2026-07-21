@@ -219,12 +219,7 @@ export function readDeclines(dataDirectory?: string): Map<string, string> {
     if (!existsSync(file)) return map;
     const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { declined?: DeclineEntry[] };
     for (const entry of parsed?.declined ?? []) {
-      if (
-        entry &&
-        typeof entry.project === 'string' &&
-        typeof entry.at === 'string' &&
-        !Number.isNaN(Date.parse(entry.at))
-      ) {
+      if (entry && typeof entry.project === 'string' && typeof entry.at === 'string') {
         map.set(entry.project, entry.at);
       }
     }
@@ -267,5 +262,12 @@ export function resetDeclines(dataDirectory?: string): void {
 export function isSuppressed(candidate: OrphanCandidate, declines: Map<string, string>): boolean {
   const declinedAt = declines.get(candidate.project);
   if (!declinedAt) return false;
-  return candidate.lastSeen <= declinedAt;
+  const declined = Date.parse(declinedAt);
+  const seen = Date.parse(candidate.lastSeen);
+  // Fail open: an unparseable timestamp on either side must re-ask, never
+  // suppress. A raw string compare here silently suppresses forever when a
+  // value is not ISO-8601 — e.g. a SQLite `datetime('now')` value sorts below
+  // every ISO decline because space (0x20) < 'T' (0x54).
+  if (Number.isNaN(declined) || Number.isNaN(seen)) return false;
+  return seen <= declined;
 }

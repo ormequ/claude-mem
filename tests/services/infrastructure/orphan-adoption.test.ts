@@ -287,14 +287,14 @@ describe('decline store', () => {
     expect(readDeclines(dataDir).size).toBe(0);
   });
 
-  it('drops a decline entry whose `at` is not a parseable timestamp (fail-open)', () => {
-    // A garbage `at` that is still valid JSON with the right shape used to
-    // pass the old `typeof entry.at === 'string'` guard. isSuppressed then
-    // compared candidate.lastSeen <= declinedAt as plain strings, and any
-    // string starting with a letter ('garbage') sorts above every ISO
-    // timestamp (which starts with a digit) — so the entry suppressed the
-    // project forever. It must instead be dropped, so the project is asked
-    // about again.
+  it('does not suppress when the decline `at` is not a parseable timestamp (fail-open)', () => {
+    // A garbage `at` that is still valid JSON with the right shape is kept by
+    // readDeclines (it doesn't validate the timestamp). The defense lives in
+    // isSuppressed instead: comparing candidate.lastSeen <= declinedAt as
+    // plain strings would suppress forever, since any string starting with a
+    // letter ('garbage') sorts above every ISO timestamp (which starts with a
+    // digit). isSuppressed parses both sides and fails open when either is
+    // unparseable, so the project is asked about again.
     const dataDir = makeDataDir([]);
     mkdirSync(path.join(dataDir, 'state'), { recursive: true });
     writeFileSync(
@@ -302,8 +302,29 @@ describe('decline store', () => {
       JSON.stringify({ declined: [{ project: 'demo/bad-timestamp', at: 'garbage' }] }),
       'utf-8'
     );
+    const declines = readDeclines(dataDir);
 
-    expect(readDeclines(dataDir).size).toBe(0);
+    expect(isSuppressed(candidate('demo/bad-timestamp', '2026-07-20T00:00:00.000Z'), declines)).toBe(false);
+  });
+
+  it('does not suppress against a SQLite-style decline timestamp compared to a newer ISO lastSeen', () => {
+    // `datetime('now')`-style values ("2026-07-21 06:36:37", space-separated,
+    // no `Z`) are a plausible way a timestamp ends up in this file outside
+    // the ISO-8601 path recordDecline uses. Under a raw string comparison
+    // this shape suppresses forever: space (0x20) sorts below every digit, so
+    // a SQLite-style declinedAt is "less than" any ISO lastSeen no matter how
+    // far in the future. Date.parse understands this format, so the parsed
+    // comparison must not suppress a genuinely newer lastSeen.
+    const dataDir = makeDataDir([]);
+    mkdirSync(path.join(dataDir, 'state'), { recursive: true });
+    writeFileSync(
+      path.join(dataDir, 'state', 'orphan-decisions.json'),
+      JSON.stringify({ declined: [{ project: 'demo/sqlite-style', at: '2026-07-21 06:36:37' }] }),
+      'utf-8'
+    );
+    const declines = readDeclines(dataDir);
+
+    expect(isSuppressed(candidate('demo/sqlite-style', '2026-07-22T00:00:00.000Z'), declines)).toBe(false);
   });
 
   it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', () => {
