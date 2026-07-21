@@ -39,7 +39,13 @@ for arg in "$@"; do
   fi
 done
 if [[ -n "$found_orphans" ]]; then
-  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" "${orphans_args[@]}"
+  # `${arr[@]+"${arr[@]}"}` rather than a bare `"${orphans_args[@]}"`: macOS ships
+  # bash 3.2, where expanding an EMPTY array under `set -u` is an unbound-variable
+  # error (fixed in 4.4+). A bare `adopt-mem --orphans` leaves the array empty, so
+  # the plain form breaks the most common invocation — and it breaks it precisely
+  # in the contexts the ~/.local/bin symlink exists for (orca, launchd, a minimal
+  # PATH), where `env bash` resolves to /bin/bash rather than a homebrew build.
+  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" ${orphans_args[@]+"${orphans_args[@]}"}
 fi
 
 dir="" dryrun="" all=""
