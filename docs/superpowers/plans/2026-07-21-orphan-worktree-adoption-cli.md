@@ -12,7 +12,20 @@
 
 ## Global Constraints
 
-- **Zero upstream diff.** Do not edit `src/services/infrastructure/WorktreeAdoption.ts`, `src/services/worker-service.ts`, `src/npx-cli/**`, or any other file that exists on `origin/main`. Verify before committing: `git diff --stat origin/main -- src/ | grep -v OrphanAdoption` must show no new entries.
+- **Minimal upstream diff — ONE exception, granted by the owner 2026-07-21.**
+  The only permitted edit to an upstream file is adding the `export` keyword to
+  two existing functions in `src/services/infrastructure/WorktreeAdoption.ts`:
+  `gitCapture` and `resolveMainRepoPath`. Nothing else about them changes — no
+  signature, no body, no reordering.
+  **`listWorktrees` is explicitly NOT exported and NOT modified.** Its upstream
+  body does not parse the `prunable` attribute (`WorktreeAdoption.ts:84-105`),
+  and teaching it to would be a behavioral change to upstream logic — far more
+  expensive at merge time than the duplication it saves. This module ships its
+  own `listWorktrees` that parses `prunable`.
+  No other upstream file may be touched: not `src/services/worker-service.ts`,
+  not `src/npx-cli/**`, not anything else present on `origin/main`.
+  Verify before committing: `git diff origin/main -- src/services/infrastructure/WorktreeAdoption.ts`
+  must show exactly two changed lines, each adding only the word `export`.
 - **Never open a Chroma writer.** Adoption only sets SQLite state. The worker patches Chroma from the `chroma_merge_synced_at IS NULL` queue. A second writer over the same store is the 2026-07-11 incident (`FORK_NOTES.md:313-338`).
 - **One metric everywhere:** counts shown to the user are `observations + summaries`.
 - **Run tests with the sandbox disabled** — it denies reads of `./node_modules`, so imports die at module resolution and read as a code failure (`FORK_NOTES.md:360-363`).
@@ -251,7 +264,30 @@ Expected: FAIL — `Cannot find module '../../../src/services/infrastructure/Orp
 
 Run with the sandbox disabled.
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3a: Export the two reusable helpers from upstream**
+
+This is the single permitted upstream edit (see Global Constraints). In
+`src/services/infrastructure/WorktreeAdoption.ts`, add the `export` keyword to
+exactly these two declarations — change nothing else about them:
+
+```typescript
+export function gitCapture(cwd: string, args: string[]): string | null {
+```
+
+```typescript
+export function resolveMainRepoPath(cwd: string): string | null {
+```
+
+Do **not** export or modify `listWorktrees` — its body does not parse the
+`prunable` attribute, and changing that is an upstream behavioral delta this
+plan refuses to pay.
+
+Verify the edit is exactly two words:
+
+Run: `git diff origin/main -- src/services/infrastructure/WorktreeAdoption.ts`
+Expected: two changed lines, each differing only by a leading `export `.
+
+- [ ] **Step 3b: Write minimal implementation**
 
 Create `src/services/infrastructure/OrphanAdoption.ts`:
 
@@ -272,14 +308,13 @@ Create `src/services/infrastructure/OrphanAdoption.ts`:
 // approves.
 import path from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { spawnSync } from 'child_process';
 import { logger } from '../../utils/logger.js';
 import { paths } from '../../shared/paths.js';
 import { getProjectContext } from '../../utils/project-name.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { listKnownCwds } from './KnownCwdRegistry.js';
 
-const GIT_TIMEOUT_MS = 15000;
+import { gitCapture, resolveMainRepoPath } from './WorktreeAdoption.js';
 
 export interface OrphanCandidate {
   project: string;
@@ -300,23 +335,6 @@ export interface OrphanScanResult {
 interface WorktreeEntry {
   path: string;
   prunable: boolean;
-}
-
-function gitCapture(cwd: string, args: string[]): string | null {
-  const r = spawnSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
-  });
-  if (r.error || r.status !== 0) return null;
-  return (r.stdout ?? '').trim();
-}
-
-function resolveMainRepoPath(cwd: string): string | null {
-  if (!existsSync(cwd)) return null;
-  const commonDir = gitCapture(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  if (!commonDir) return null;
-  const mainRoot = commonDir.endsWith('/.git') ? path.dirname(commonDir) : commonDir.replace(/\.git$/, '');
-  return existsSync(mainRoot) ? mainRoot : null;
 }
 
 /**
@@ -476,15 +494,18 @@ export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } 
 Run: `bun test tests/services/infrastructure/orphan-adoption.test.ts`
 Expected: PASS — 7 pass, 0 fail
 
-- [ ] **Step 5: Verify zero upstream diff**
+- [ ] **Step 5: Verify the upstream diff is only the two exports**
+
+Run: `git diff origin/main -- src/services/infrastructure/WorktreeAdoption.ts | grep '^[+-]' | grep -v '^[+-][+-]'`
+Expected: exactly four lines — two `-function …` and two `+export function …`, for `gitCapture` and `resolveMainRepoPath` only. Anything else means the constraint was broken.
 
 Run: `git diff --stat origin/main -- src/`
-Expected: the only new entry is `src/services/infrastructure/OrphanAdoption.ts`. No other `src/` file appears that was not already in the fork delta.
+Expected: `OrphanAdoption.ts` as the only new file; `WorktreeAdoption.ts` with 2 insertions / 2 deletions on top of the pre-existing fork delta.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/services/infrastructure/OrphanAdoption.ts tests/services/infrastructure/orphan-adoption.test.ts
+git add src/services/infrastructure/OrphanAdoption.ts src/services/infrastructure/WorktreeAdoption.ts tests/services/infrastructure/orphan-adoption.test.ts
 git commit -m "feat(orphans): detect memory rows from deleted worktrees
 
 Liveness requires both an existing directory and no \`prunable\` marker —
