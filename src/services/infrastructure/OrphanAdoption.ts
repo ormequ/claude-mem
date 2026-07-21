@@ -13,6 +13,7 @@
 // WorktreeAdoption.ts:188-190), so the tool presents facts and a human
 // approves.
 import path from 'path';
+import type { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { paths } from '../../shared/paths.js';
@@ -29,6 +30,9 @@ export interface OrphanCandidate {
   summaries: number;
   firstSeen: string;
   lastSeen: string;
+  /** Same instants as firstSeen/lastSeen, as `created_at_epoch` integers straight from SQLite — never parsed from text. */
+  firstSeenEpoch: number;
+  lastSeenEpoch: number;
 }
 
 export interface OrphanScanResult {
@@ -112,6 +116,8 @@ interface ProjectRow {
   summaries: number;
   firstSeen: string;
   lastSeen: string;
+  firstSeenEpoch: number;
+  lastSeenEpoch: number;
 }
 
 function readUnadoptedProjects(dbPath: string): ProjectRow[] {
@@ -122,14 +128,18 @@ function readUnadoptedProjects(dbPath: string): ProjectRow[] {
              SUM(obs) AS observations,
              SUM(sums) AS summaries,
              MIN(first_seen) AS firstSeen,
-             MAX(last_seen) AS lastSeen
+             MAX(last_seen) AS lastSeen,
+             MIN(first_seen_epoch) AS firstSeenEpoch,
+             MAX(last_seen_epoch) AS lastSeenEpoch
       FROM (
         SELECT project, COUNT(*) AS obs, 0 AS sums,
-               MIN(created_at) AS first_seen, MAX(created_at) AS last_seen
+               MIN(created_at) AS first_seen, MAX(created_at) AS last_seen,
+               MIN(created_at_epoch) AS first_seen_epoch, MAX(created_at_epoch) AS last_seen_epoch
         FROM observations WHERE merged_into_project IS NULL GROUP BY project
         UNION ALL
         SELECT project, 0 AS obs, COUNT(*) AS sums,
-               MIN(created_at) AS first_seen, MAX(created_at) AS last_seen
+               MIN(created_at) AS first_seen, MAX(created_at) AS last_seen,
+               MIN(created_at_epoch) AS first_seen_epoch, MAX(created_at_epoch) AS last_seen_epoch
         FROM session_summaries WHERE merged_into_project IS NULL GROUP BY project
       )
       WHERE project LIKE '%/%'
@@ -175,6 +185,8 @@ export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } 
       summaries: Number(row.summaries ?? 0),
       firstSeen: row.firstSeen,
       lastSeen: row.lastSeen,
+      firstSeenEpoch: Number(row.firstSeenEpoch),
+      lastSeenEpoch: Number(row.lastSeenEpoch),
     };
 
     if (!parentRepos.has(parentProject)) {
@@ -198,6 +210,16 @@ export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } 
     skipped: result.skipped.length,
   });
   return result;
+}
+
+/**
+ * Whether `table` has a column named `column`. Same shape as
+ * ChromaMergeDrain.ts's `hasFlagColumn` — kept as a local copy rather than an
+ * import, since this module must not depend on the sync module.
+ */
+function hasColumn(db: Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return cols.some(c => c.name === column);
 }
 
 const DECISIONS_BASENAME = 'orphan-decisions.json';
@@ -263,13 +285,15 @@ export function isSuppressed(candidate: OrphanCandidate, declines: Map<string, s
   const declinedAt = declines.get(candidate.project);
   if (!declinedAt) return false;
   const declined = Date.parse(declinedAt);
-  const seen = Date.parse(candidate.lastSeen);
-  // Fail open: an unparseable timestamp on either side must re-ask, never
-  // suppress. A raw string compare here silently suppresses forever when a
-  // value is not ISO-8601 — e.g. a SQLite `datetime('now')` value sorts below
-  // every ISO decline because space (0x20) < 'T' (0x54).
-  if (Number.isNaN(declined) || Number.isNaN(seen)) return false;
-  return seen <= declined;
+  // Fail open: an unparseable decline timestamp must re-ask, never suppress.
+  // The DB side (lastSeenEpoch) is `created_at_epoch`, a schema-enforced
+  // INTEGER (milliseconds since epoch, SessionStore.ts) read straight out of
+  // SQLite — it is never parsed from text, so it carries no timezone or
+  // format risk. `Date.parse(declinedAt)` is a real string-format parse of a
+  // form we control (recordDecline always writes `toISOString()`), which is
+  // why only this side needs the NaN guard.
+  if (Number.isNaN(declined)) return false;
+  return candidate.lastSeenEpoch <= declined;
 }
 
 /**
@@ -291,9 +315,16 @@ export function adoptOrphan(
   const dbPath = path.join(dataDirectory, 'claude-mem.db');
   const db = openConfiguredSqliteDatabase(dbPath);
   try {
-    const obsColumns = db.prepare('PRAGMA table_info(observations)').all() as Array<{ name: string }>;
-    if (!obsColumns.some(c => c.name === 'merged_into_project')) {
-      throw new Error('observations.merged_into_project is missing — run the worker once to migrate');
+    // Both columns this function writes, on both tables — each added by its
+    // own ALTER TABLE migration, so any one of the four can be missing on an
+    // unmigrated DB. Checking only observations.merged_into_project (as this
+    // used to) leaves the other three reachable and unchecked.
+    for (const table of ['observations', 'session_summaries'] as const) {
+      for (const column of ['merged_into_project', 'chroma_merge_synced_at'] as const) {
+        if (!hasColumn(db, table, column)) {
+          throw new Error(`${table}.${column} is missing — run the worker once to migrate`);
+        }
+      }
     }
 
     let observations = 0;

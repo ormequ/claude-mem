@@ -10,16 +10,35 @@ import {
   scanOrphans, readDeclines, recordDecline, resetDeclines, isSuppressed, adoptOrphan,
   type OrphanCandidate,
 } from '../src/services/infrastructure/OrphanAdoption.js';
+import { resolveMainRepoPath } from '../src/services/infrastructure/WorktreeAdoption.js';
 
 const argv = process.argv.slice(2);
 const dryRun = argv.includes('--dry-run');
 const doReset = argv.includes('--reset-declined');
-const repoIndex = argv.indexOf('--repo');
-const repoPath = repoIndex !== -1 ? argv[repoIndex + 1] : undefined;
 
-if (repoIndex !== -1 && (!repoPath || repoPath.startsWith('--'))) {
-  console.error('Usage: adopt-mem --orphans [--dry-run] [--reset-declined] [--repo <path>]');
+// Accept both `--repo <path>` (space-separated) and `--repo=<path>` (equals
+// form) — the latter is easy to reach for and was silently swallowed before.
+const repoEqualsArg = argv.find(a => a.startsWith('--repo='));
+const repoIndex = argv.indexOf('--repo');
+const repoPath = repoEqualsArg
+  ? repoEqualsArg.slice('--repo='.length)
+  : repoIndex !== -1 ? argv[repoIndex + 1] : undefined;
+
+if (repoEqualsArg && repoEqualsArg.slice('--repo='.length) === '') {
+  console.error('Usage: adopt-mem --orphans [--dry-run] [--reset-declined] [--repo <path>|--repo=<path>]');
   process.exit(1);
+}
+if (!repoEqualsArg && repoIndex !== -1 && (!repoPath || repoPath.startsWith('--'))) {
+  console.error('Usage: adopt-mem --orphans [--dry-run] [--reset-declined] [--repo <path>|--repo=<path>]');
+  process.exit(1);
+}
+
+// A path that just doesn't resolve to a git repo produces the same generic
+// "not resolvable — pass --repo <path>" skip message as not passing --repo at
+// all, which is confusing when the user just typed --repo. Say plainly what's
+// wrong with the given path up front.
+if (repoPath && !resolveMainRepoPath(repoPath)) {
+  console.error(`! --repo ${repoPath} did not resolve to a git repository`);
 }
 
 // Whether this run is allowed to write anything at all — the single gate
@@ -43,15 +62,16 @@ const day = (iso: string) => iso.slice(0, 10);
 const line = (c: OrphanCandidate) =>
   `  ${c.project.padEnd(38)} ${String(total(c)).padStart(5)} rows   ${day(c.firstSeen)} – ${day(c.lastSeen)}`;
 
-// scanOrphans opens the SQLite DB read-only. `PRAGMA journal_mode = WAL` on
-// that open is a no-op when the DB is already WAL (which it always is in
-// production — the worker maintains it) and does not contend for the
-// worker's write lock, so this is not a crash reachable in normal
-// operation. But if scanOrphans ever does throw for any reason, a read-only
-// command shouldn't die with a raw Bun stack trace — surface the same
-// plain-language "database is locked" message the adopt loop below uses for
-// that specific error, and a generic one otherwise, and exit non-zero so a
-// failed run never looks like a clean one.
+// scanOrphans does NOT open the SQLite DB read-only — openConfiguredSqliteDatabase
+// opens for write, and on a non-WAL database this genuinely converts it to WAL
+// and creates -wal/-shm files, even under --dry-run. That conversion is a
+// no-op in production, though: the worker already maintains the DB in WAL
+// mode, so `PRAGMA journal_mode = WAL` on this open finds nothing to change,
+// and it does not contend for the worker's write lock. But if scanOrphans
+// ever does throw for any reason, a read command shouldn't die with a raw Bun
+// stack trace — surface the same plain-language "database is locked" message
+// the adopt loop below uses for that specific error, and a generic one
+// otherwise, and exit non-zero so a failed run never looks like a clean one.
 let result: ReturnType<typeof scanOrphans>;
 try {
   result = scanOrphans({ repoPath });
@@ -97,13 +117,26 @@ function ask(question: string): Promise<string> {
   process.stdout.write(question);
   return new Promise(resolve => {
     process.stdin.setEncoding('utf8');
-    const onData = (chunk: string) => {
+    const cleanup = () => {
       process.stdin.pause();
       process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+    };
+    const onData = (chunk: string) => {
+      cleanup();
       resolve(chunk.trim().toLowerCase());
+    };
+    // Ctrl-D (EOF) never fires 'data' — without this the promise never
+    // settles and the process hangs on a prompt no one can answer. Treat it
+    // the same as an explicit 'q': stop the run cleanly, adopting/declining
+    // nothing further.
+    const onEnd = () => {
+      cleanup();
+      resolve('q');
     };
     process.stdin.resume();
     process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
   });
 }
 

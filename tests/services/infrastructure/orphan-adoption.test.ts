@@ -51,6 +51,7 @@ function makeDataDir(knownCwds: string[]): string {
     memory_session_id TEXT NOT NULL,
     project TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    created_at_epoch INTEGER NOT NULL,
     merged_into_project TEXT,
     chroma_merge_synced_at INTEGER
   )`);
@@ -59,6 +60,7 @@ function makeDataDir(knownCwds: string[]): string {
     memory_session_id TEXT NOT NULL,
     project TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    created_at_epoch INTEGER NOT NULL,
     merged_into_project TEXT,
     chroma_merge_synced_at INTEGER
   )`);
@@ -73,14 +75,15 @@ function addRows(
   sums: number,
   createdAt = '2026-07-20T10:00:00.000Z'
 ): void {
+  const createdAtEpoch = Date.parse(createdAt);
   const db = new Database(path.join(dataDir, 'claude-mem.db'));
   for (let i = 0; i < obs; i++) {
-    db.run('INSERT INTO observations (memory_session_id, project, created_at) VALUES (?, ?, ?)',
-      [`s${i}`, project, createdAt]);
+    db.run('INSERT INTO observations (memory_session_id, project, created_at, created_at_epoch) VALUES (?, ?, ?, ?)',
+      [`s${i}`, project, createdAt, createdAtEpoch]);
   }
   for (let i = 0; i < sums; i++) {
-    db.run('INSERT INTO session_summaries (memory_session_id, project, created_at) VALUES (?, ?, ?)',
-      [`s${i}`, project, createdAt]);
+    db.run('INSERT INTO session_summaries (memory_session_id, project, created_at, created_at_epoch) VALUES (?, ?, ?, ?)',
+      [`s${i}`, project, createdAt, createdAtEpoch]);
   }
   db.close();
 }
@@ -245,6 +248,11 @@ describe('scanOrphans', () => {
 describe('decline store', () => {
   // firstSeen and lastSeen default to distinct values so a test can never
   // accidentally pass regardless of which field isSuppressed reads.
+  // firstSeenEpoch/lastSeenEpoch are derived from the ISO strings via
+  // Date.parse, which is timezone-safe for a `Z`-suffixed ISO string — unlike
+  // the SQLite-style text isSuppressed used to parse (see the dedicated test
+  // below), these are only ever used as inputs, never as what isSuppressed
+  // itself parses.
   const candidate = (
     project: string,
     lastSeen: string,
@@ -252,6 +260,8 @@ describe('decline store', () => {
   ): OrphanCandidate => ({
     project, parentProject: 'demo', observations: 1, summaries: 0,
     firstSeen, lastSeen,
+    firstSeenEpoch: Date.parse(firstSeen),
+    lastSeenEpoch: Date.parse(lastSeen),
   });
 
   it('suppresses a declined project whose rows are all older than the decline', () => {
@@ -310,11 +320,9 @@ describe('decline store', () => {
   it('does not suppress when the decline `at` is not a parseable timestamp (fail-open)', () => {
     // A garbage `at` that is still valid JSON with the right shape is kept by
     // readDeclines (it doesn't validate the timestamp). The defense lives in
-    // isSuppressed instead: comparing candidate.lastSeen <= declinedAt as
-    // plain strings would suppress forever, since any string starting with a
-    // letter ('garbage') sorts above every ISO timestamp (which starts with a
-    // digit). isSuppressed parses both sides and fails open when either is
-    // unparseable, so the project is asked about again.
+    // isSuppressed instead: `Date.parse('garbage')` is NaN, and isSuppressed
+    // fails open on a NaN decline timestamp rather than suppressing, so the
+    // project is asked about again.
     const dataDir = makeDataDir([]);
     mkdirSync(path.join(dataDir, 'state'), { recursive: true });
     writeFileSync(
@@ -327,27 +335,41 @@ describe('decline store', () => {
     expect(isSuppressed(candidate('demo/bad-timestamp', '2026-07-20T00:00:00.000Z'), declines)).toBe(false);
   });
 
-  it('does not suppress a newer SQLite-style lastSeen against an ISO decline', () => {
-    // The DB-derived operand is `lastSeen` (MAX(created_at)); `at` is always
-    // written by recordDecline via toISOString(). So the format risk lives on
-    // lastSeen: if a future writer ever stored `datetime('now')` values
-    // ("2026-07-21 06:36:37", space-separated, no `Z`), a raw string compare
-    // suppresses that project forever, because space (0x20) sorts below `T`
-    // (0x54) — making a genuinely NEWER row compare as older than the decline.
+  it('does not suppress a genuinely newer row regardless of what lastSeen\'s text form says', () => {
+    // isSuppressed must compare candidate.lastSeenEpoch (a schema-enforced
+    // INTEGER read straight out of SQLite, never parsed from text) against
+    // the decline — never `Date.parse(candidate.lastSeen)`.
     //
-    // The date parts must match so the comparison actually reaches that byte:
-    // with differing days it resolves earlier and the test proves nothing.
-    // Verified both directions — reverting isSuppressed to a raw string
-    // compare makes this test fail.
+    // This is not a hypothetical: `Date.parse('2026-07-21 06:36:37')` (SQLite
+    // `datetime('now')` form — space-separated, no `Z`) does NOT return NaN;
+    // the engine parses it as LOCAL time, so the old fail-open NaN guard
+    // never fired for this form. The result then silently depended on the
+    // machine's timezone offset — verified: under TZ=Asia/Tokyo the old
+    // implementation returned `true` (suppressed, the fail-CLOSED direction
+    // this tool exists to avoid) for a row that is genuinely newer than the
+    // decline.
+    //
+    // lastSeen is deliberately set to that exact SQLite-style string while
+    // lastSeenEpoch is pinned directly to a real epoch integer newer than the
+    // decline — proving isSuppressed reads the integer, not the text,
+    // whatever the text form happens to be.
     const dataDir = makeDataDir([]);
+    const declinedAt = '2026-07-21T00:00:00.000Z';
     writeFileSync(
       path.join(dataDir, 'state', 'orphan-decisions.json'),
-      JSON.stringify({ declined: [{ project: 'demo/sqlite-style', at: '2026-07-21T00:00:00.000Z' }] }),
+      JSON.stringify({ declined: [{ project: 'demo/sqlite-style', at: declinedAt }] }),
       'utf-8'
     );
     const declines = readDeclines(dataDir);
 
-    expect(isSuppressed(candidate('demo/sqlite-style', '2026-07-21 06:36:37'), declines)).toBe(false);
+    const sqliteStyleCandidate: OrphanCandidate = {
+      project: 'demo/sqlite-style', parentProject: 'demo', observations: 1, summaries: 0,
+      firstSeen: '2000-01-01T00:00:00.000Z', firstSeenEpoch: Date.parse('2000-01-01T00:00:00.000Z'),
+      lastSeen: '2026-07-21 06:36:37',
+      lastSeenEpoch: Date.parse(declinedAt) + 1000,
+    };
+
+    expect(isSuppressed(sqliteStyleCandidate, declines)).toBe(false);
   });
 
   it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', () => {
@@ -420,6 +442,50 @@ describe('adoptOrphan', () => {
 
     expect(untouched.n).toBe(3);
   });
+
+  it('does not re-parent a project already adopted under a different parent', () => {
+    // Pins the IS NULL guard's intent: the idempotency test above only
+    // covers re-running with the SAME parent. A project whose rows already
+    // carry a DIFFERENT merge pointer must be left alone entirely — 0 rows
+    // changed, never silently re-parented to whatever parent is passed next.
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo/gone', 2, 1);
+    const db = new Database(path.join(dataDir, 'claude-mem.db'));
+    db.run("UPDATE observations SET merged_into_project = 'other-parent'");
+    db.run("UPDATE session_summaries SET merged_into_project = 'other-parent'");
+    db.close();
+
+    const changed = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
+
+    expect(changed).toEqual({ observations: 0, summaries: 0 });
+
+    const check = new Database(path.join(dataDir, 'claude-mem.db'));
+    const obs = check.prepare(
+      "SELECT merged_into_project mp FROM observations WHERE project = 'demo/gone'"
+    ).all() as Array<{ mp: string }>;
+    const sums = check.prepare(
+      "SELECT merged_into_project mp FROM session_summaries WHERE project = 'demo/gone'"
+    ).all() as Array<{ mp: string }>;
+    check.close();
+
+    expect(obs.every(r => r.mp === 'other-parent')).toBe(true);
+    expect(sums.every(r => r.mp === 'other-parent')).toBe(true);
+  });
+
+  it('names the missing table and column when a migration has not run', () => {
+    // The PRAGMA check must cover all four columns adoptOrphan depends on
+    // (merged_into_project and chroma_merge_synced_at on both tables), each
+    // added by its own ALTER TABLE migration — not just
+    // observations.merged_into_project. Drop just one of the other three and
+    // confirm the error names it specifically.
+    const dataDir = makeDataDir([]);
+    const db = new Database(path.join(dataDir, 'claude-mem.db'));
+    db.run('ALTER TABLE observations DROP COLUMN chroma_merge_synced_at');
+    db.close();
+
+    expect(() => adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir }))
+      .toThrow('observations.chroma_merge_synced_at is missing');
+  });
 });
 
 describe('adopt-orphans CLI --reset-declined', () => {
@@ -446,5 +512,39 @@ describe('adopt-orphans CLI --reset-declined', () => {
     expect(r.stdout).toContain('would clear 1 recorded decline');
     const after = readFileSync(decisionsFile, 'utf-8');
     expect(after).toBe(before);
+  });
+
+  it('leaves the database untouched under --dry-run', () => {
+    // The comment above scanOrphans in adopt-orphans.ts used to claim the DB
+    // is opened read-only; it is not (openConfiguredSqliteDatabase opens for
+    // write and enables WAL). --dry-run must still be a true no-op against
+    // the row data regardless of that write-mode open — pin the row counts
+    // and merged_into_project values, not just the decisions file.
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo/gone', 3, 1);
+    const snapshot = () => {
+      const db = new Database(path.join(dataDir, 'claude-mem.db'));
+      const obs = db.prepare(
+        "SELECT COUNT(*) n FROM observations WHERE project = 'demo/gone' AND merged_into_project IS NULL"
+      ).get() as { n: number };
+      const sums = db.prepare(
+        "SELECT COUNT(*) n FROM session_summaries WHERE project = 'demo/gone' AND merged_into_project IS NULL"
+      ).get() as { n: number };
+      db.close();
+      return { obs: obs.n, sums: sums.n };
+    };
+    const before = snapshot();
+
+    const scriptPath = path.join(process.cwd(), 'scripts', 'adopt-orphans.ts');
+    const r = spawnSync('bun', [scriptPath, '--dry-run'], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_MEM_DATA_DIR: dataDir },
+      stdio: ['pipe', 'pipe', 'pipe'], // stdin is a pipe, never a TTY, here
+    });
+
+    expect(r.status).toBe(0);
+    const after = snapshot();
+    expect(after).toEqual(before);
+    expect(after).toEqual({ obs: 3, sums: 1 });
   });
 });

@@ -27,9 +27,19 @@ set -euo pipefail
 # --orphans is a different job from the adoption below: it reviews memory left
 # behind by worktrees that no longer exist, which the worktree-list-driven
 # adoption can never see. It runs from the dev checkout (it imports src/).
-if [[ "${1:-}" == "--orphans" ]]; then
-  shift
-  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" "$@"
+# Detected anywhere in the argument list, not just $1 — `--dry-run --orphans`
+# must route here too, not fall through and get read as a worktree dir.
+orphans_args=()
+found_orphans=""
+for arg in "$@"; do
+  if [[ "$arg" == "--orphans" ]]; then
+    found_orphans=1
+  else
+    orphans_args+=("$arg")
+  fi
+done
+if [[ -n "$found_orphans" ]]; then
+  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" "${orphans_args[@]}"
 fi
 
 dir="" dryrun="" all=""
