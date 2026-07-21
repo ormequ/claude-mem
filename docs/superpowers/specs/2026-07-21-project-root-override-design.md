@@ -3,8 +3,8 @@
 ## Goal
 
 Allow a user to set `CLAUDE_MEM_PROJECT_ROOT` so every Claude Mem project
-lookup inside that directory hierarchy uses one shared project key. This lets
-a directory containing several independent Git repositories share memory.
+lookup uses one shared project key. This lets a directory containing several
+independent Git repositories share memory.
 
 ## Context
 
@@ -31,10 +31,11 @@ shared root. No code currently reads `CLAUDE_MEM_PROJECT_ROOT`.
 
 `getProjectContext(cwd)` will first read and trim `CLAUDE_MEM_PROJECT_ROOT`.
 When it is set, the configured directory is used as the project-identity
-source rather than the hook cwd. It is intentionally treated as a grouping
-root: its basename (or its own Git root if it is a Git repository) becomes
-the only project key, and worktree expansion is skipped. When unset, the
-existing cwd- and worktree-derived behavior remains byte-for-byte compatible.
+source rather than the hook cwd, regardless of the cwd. It is intentionally
+treated as a grouping root: its basename (or its own Git root if it is a Git
+repository) becomes the only project key, and worktree expansion is skipped.
+When unset, the existing cwd- and worktree-derived behavior remains
+byte-for-byte compatible.
 
 For the stated configuration, every hook under `MKS` resolves to `MKS`. This
 matches the 245 existing MKS sessions already in the local memory database;
