@@ -223,9 +223,15 @@ describe('scanOrphans', () => {
 });
 
 describe('decline store', () => {
-  const candidate = (project: string, lastSeen: string): OrphanCandidate => ({
+  // firstSeen and lastSeen default to distinct values so a test can never
+  // accidentally pass regardless of which field isSuppressed reads.
+  const candidate = (
+    project: string,
+    lastSeen: string,
+    firstSeen = '2000-01-01T00:00:00.000Z'
+  ): OrphanCandidate => ({
     project, parentProject: 'demo', observations: 1, summaries: 0,
-    firstSeen: lastSeen, lastSeen,
+    firstSeen, lastSeen,
   });
 
   it('suppresses a declined project whose rows are all older than the decline', () => {
@@ -240,11 +246,19 @@ describe('decline store', () => {
     // Worktree names are reused (api-reanimation, dropdown-primevue are not
     // random). A decline keyed only by name would permanently hide the memory
     // of a NEW worktree that happens to reuse the name.
+    //
+    // firstSeen is deliberately OLD (predates the decline) while lastSeen is
+    // NEW — this pins that isSuppressed reads lastSeen, not firstSeen. A
+    // project whose firstSeen predates the decline must still re-surface once
+    // fresh rows arrive.
     const dataDir = makeDataDir([]);
     recordDecline('demo/reused-name', dataDir);
     const declines = readDeclines(dataDir);
 
-    expect(isSuppressed(candidate('demo/reused-name', '2099-01-01T00:00:00.000Z'), declines)).toBe(false);
+    expect(isSuppressed(
+      candidate('demo/reused-name', '2099-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
+      declines
+    )).toBe(false);
   });
 
   it('does not suppress a project that was never declined', () => {
@@ -271,5 +285,42 @@ describe('decline store', () => {
     writeFileSync(path.join(dataDir, 'state', 'orphan-decisions.json'), '{ not json', 'utf-8');
 
     expect(readDeclines(dataDir).size).toBe(0);
+  });
+
+  it('drops a decline entry whose `at` is not a parseable timestamp (fail-open)', () => {
+    // A garbage `at` that is still valid JSON with the right shape used to
+    // pass the old `typeof entry.at === 'string'` guard. isSuppressed then
+    // compared candidate.lastSeen <= declinedAt as plain strings, and any
+    // string starting with a letter ('garbage') sorts above every ISO
+    // timestamp (which starts with a digit) — so the entry suppressed the
+    // project forever. It must instead be dropped, so the project is asked
+    // about again.
+    const dataDir = makeDataDir([]);
+    mkdirSync(path.join(dataDir, 'state'), { recursive: true });
+    writeFileSync(
+      path.join(dataDir, 'state', 'orphan-decisions.json'),
+      JSON.stringify({ declined: [{ project: 'demo/bad-timestamp', at: 'garbage' }] }),
+      'utf-8'
+    );
+
+    expect(readDeclines(dataDir).size).toBe(0);
+  });
+
+  it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', () => {
+    // A row created in the same millisecond as the decline was already part
+    // of what the user was shown, so <= (not <) is correct: it must still be
+    // suppressed. Written directly rather than via recordDecline, which
+    // stamps Date.now() and can't be pinned to an exact value.
+    const dataDir = makeDataDir([]);
+    mkdirSync(path.join(dataDir, 'state'), { recursive: true });
+    const at = '2026-07-20T12:00:00.000Z';
+    writeFileSync(
+      path.join(dataDir, 'state', 'orphan-decisions.json'),
+      JSON.stringify({ declined: [{ project: 'demo/boundary', at }] }),
+      'utf-8'
+    );
+    const declines = readDeclines(dataDir);
+
+    expect(isSuppressed(candidate('demo/boundary', at), declines)).toBe(true);
   });
 });

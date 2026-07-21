@@ -219,7 +219,12 @@ export function readDeclines(dataDirectory?: string): Map<string, string> {
     if (!existsSync(file)) return map;
     const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { declined?: DeclineEntry[] };
     for (const entry of parsed?.declined ?? []) {
-      if (entry && typeof entry.project === 'string' && typeof entry.at === 'string') {
+      if (
+        entry &&
+        typeof entry.project === 'string' &&
+        typeof entry.at === 'string' &&
+        !Number.isNaN(Date.parse(entry.at))
+      ) {
         map.set(entry.project, entry.at);
       }
     }
