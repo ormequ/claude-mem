@@ -307,24 +307,27 @@ describe('decline store', () => {
     expect(isSuppressed(candidate('demo/bad-timestamp', '2026-07-20T00:00:00.000Z'), declines)).toBe(false);
   });
 
-  it('does not suppress against a SQLite-style decline timestamp compared to a newer ISO lastSeen', () => {
-    // `datetime('now')`-style values ("2026-07-21 06:36:37", space-separated,
-    // no `Z`) are a plausible way a timestamp ends up in this file outside
-    // the ISO-8601 path recordDecline uses. Under a raw string comparison
-    // this shape suppresses forever: space (0x20) sorts below every digit, so
-    // a SQLite-style declinedAt is "less than" any ISO lastSeen no matter how
-    // far in the future. Date.parse understands this format, so the parsed
-    // comparison must not suppress a genuinely newer lastSeen.
+  it('does not suppress a newer SQLite-style lastSeen against an ISO decline', () => {
+    // The DB-derived operand is `lastSeen` (MAX(created_at)); `at` is always
+    // written by recordDecline via toISOString(). So the format risk lives on
+    // lastSeen: if a future writer ever stored `datetime('now')` values
+    // ("2026-07-21 06:36:37", space-separated, no `Z`), a raw string compare
+    // suppresses that project forever, because space (0x20) sorts below `T`
+    // (0x54) — making a genuinely NEWER row compare as older than the decline.
+    //
+    // The date parts must match so the comparison actually reaches that byte:
+    // with differing days it resolves earlier and the test proves nothing.
+    // Verified both directions — reverting isSuppressed to a raw string
+    // compare makes this test fail.
     const dataDir = makeDataDir([]);
-    mkdirSync(path.join(dataDir, 'state'), { recursive: true });
     writeFileSync(
       path.join(dataDir, 'state', 'orphan-decisions.json'),
-      JSON.stringify({ declined: [{ project: 'demo/sqlite-style', at: '2026-07-21 06:36:37' }] }),
+      JSON.stringify({ declined: [{ project: 'demo/sqlite-style', at: '2026-07-21T00:00:00.000Z' }] }),
       'utf-8'
     );
     const declines = readDeclines(dataDir);
 
-    expect(isSuppressed(candidate('demo/sqlite-style', '2026-07-22T00:00:00.000Z'), declines)).toBe(false);
+    expect(isSuppressed(candidate('demo/sqlite-style', '2026-07-21 06:36:37'), declines)).toBe(false);
   });
 
   it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', () => {
