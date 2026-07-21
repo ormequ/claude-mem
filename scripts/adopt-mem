@@ -10,11 +10,21 @@
 #   adopt-mem --all           scan EVERY worktree of the repo, adopt all merged
 #                             branches (regular + squash-merged)
 #   adopt-mem --dry-run       report what would be adopted, change nothing
+#   adopt-mem --orphans       review worktrees that were DELETED without being
+#                             adopted, and adopt them after approval
 #
 # Canonical copy lives in the claude-mem repo (scripts/adopt-mem). The
 # ~/.local/bin/adopt-mem entry is a symlink to this file so orca (and any
 # non-zsh caller) can still run it on worktree deletion.
 set -euo pipefail
+
+# --orphans is a different job from the adoption below: it reviews memory left
+# behind by worktrees that no longer exist, which the worktree-list-driven
+# adoption can never see. It runs from the dev checkout (it imports src/).
+if [[ "${1:-}" == "--orphans" ]]; then
+  shift
+  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" "$@"
+fi
 
 dir="" dryrun="" all=""
 for arg in "$@"; do

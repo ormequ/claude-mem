@@ -221,6 +221,25 @@ describe('scanOrphans', () => {
 
     expect(result.orphans).toEqual([]);
   });
+
+  it('orders orphans by lastSeen, newest first', () => {
+    // scanOrphans reads readUnadoptedProjects' `ORDER BY lastSeen DESC` and
+    // pushes into result.orphans without re-sorting — this pins that order,
+    // since Task 4's CLI prints result.orphans directly to the user.
+    const first = makeRepoWithWorktree('demo', 'feature-h');
+    const second = makeRepoWithWorktree('other', 'feature-i');
+    const dataDir = makeDataDir([
+      first.mainRepo, first.worktree, second.mainRepo, second.worktree,
+    ]);
+    addRows(dataDir, 'demo/feature-h', 1, 0, '2020-01-01T00:00:00.000Z');
+    addRows(dataDir, 'other/feature-i', 1, 0, '2026-07-20T00:00:00.000Z');
+    git(first.mainRepo, ['worktree', 'remove', first.worktree]);
+    git(second.mainRepo, ['worktree', 'remove', second.worktree]);
+
+    const result = scanOrphans({ dataDirectory: dataDir });
+
+    expect(result.orphans.map(o => o.project)).toEqual(['other/feature-i', 'demo/feature-h']);
+  });
 });
 
 describe('decline store', () => {
