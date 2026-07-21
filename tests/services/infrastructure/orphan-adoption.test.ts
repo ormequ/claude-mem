@@ -7,6 +7,7 @@ import path from 'path';
 import {
   scanOrphans,
   readDeclines, recordDecline, resetDeclines, isSuppressed,
+  adoptOrphan,
   type OrphanCandidate,
 } from '../../../src/services/infrastructure/OrphanAdoption.js';
 
@@ -346,5 +347,58 @@ describe('decline store', () => {
     const declines = readDeclines(dataDir);
 
     expect(isSuppressed(candidate('demo/boundary', at), declines)).toBe(true);
+  });
+});
+
+describe('adoptOrphan', () => {
+  it('sets merged_into_project and queues both tables for the Chroma drain', () => {
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo/gone', 3, 2);
+    const db = new Database(path.join(dataDir, 'claude-mem.db'));
+    db.run('UPDATE observations SET chroma_merge_synced_at = 111');
+    db.run('UPDATE session_summaries SET chroma_merge_synced_at = 222');
+    db.close();
+
+    const changed = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
+
+    expect(changed).toEqual({ observations: 3, summaries: 2 });
+
+    const check = new Database(path.join(dataDir, 'claude-mem.db'));
+    const obs = check.prepare(
+      "SELECT COUNT(*) n FROM observations WHERE merged_into_project = 'demo' AND chroma_merge_synced_at IS NULL"
+    ).get() as { n: number };
+    const sums = check.prepare(
+      "SELECT COUNT(*) n FROM session_summaries WHERE merged_into_project = 'demo' AND chroma_merge_synced_at IS NULL"
+    ).get() as { n: number };
+    check.close();
+
+    expect(obs.n).toBe(3);
+    expect(sums.n).toBe(2);
+  });
+
+  it('is idempotent — a second run changes nothing', () => {
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo/gone', 4, 1);
+
+    adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
+    const second = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
+
+    expect(second).toEqual({ observations: 0, summaries: 0 });
+  });
+
+  it('leaves other projects untouched', () => {
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo/gone', 2, 0);
+    addRows(dataDir, 'demo/still-here', 3, 0);
+
+    adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
+
+    const check = new Database(path.join(dataDir, 'claude-mem.db'));
+    const untouched = check.prepare(
+      "SELECT COUNT(*) n FROM observations WHERE project = 'demo/still-here' AND merged_into_project IS NULL"
+    ).get() as { n: number };
+    check.close();
+
+    expect(untouched.n).toBe(3);
   });
 });

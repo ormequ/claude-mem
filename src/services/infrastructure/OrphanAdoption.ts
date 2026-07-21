@@ -271,3 +271,50 @@ export function isSuppressed(candidate: OrphanCandidate, declines: Map<string, s
   if (Number.isNaN(declined) || Number.isNaN(seen)) return false;
   return seen <= declined;
 }
+
+/**
+ * Adopt one orphaned project into its parent.
+ *
+ * Mirrors WorktreeAdoption.ts:237-252: set the merge pointer and reset
+ * `chroma_merge_synced_at` to NULL, which enqueues the row for the worker's
+ * ChromaMergeDrain. This process must NOT open a Chroma writer of its own —
+ * the worker holds the single-writer lock (FORK_NOTES.md:313-338).
+ *
+ * `AND merged_into_project IS NULL` makes it idempotent.
+ */
+export function adoptOrphan(
+  project: string,
+  parentProject: string,
+  opts: { dataDirectory?: string } = {}
+): { observations: number; summaries: number } {
+  const dataDirectory = opts.dataDirectory ?? paths.dataDir();
+  const dbPath = path.join(dataDirectory, 'claude-mem.db');
+  const db = openConfiguredSqliteDatabase(dbPath);
+  try {
+    const obsColumns = db.prepare('PRAGMA table_info(observations)').all() as Array<{ name: string }>;
+    if (!obsColumns.some(c => c.name === 'merged_into_project')) {
+      throw new Error('observations.merged_into_project is missing — run the worker once to migrate');
+    }
+
+    let observations = 0;
+    let summaries = 0;
+    const tx = db.transaction(() => {
+      observations = db.prepare(
+        `UPDATE observations SET merged_into_project = ?, chroma_merge_synced_at = NULL
+         WHERE project = ? AND merged_into_project IS NULL`
+      ).run(parentProject, project).changes;
+      summaries = db.prepare(
+        `UPDATE session_summaries SET merged_into_project = ?, chroma_merge_synced_at = NULL
+         WHERE project = ? AND merged_into_project IS NULL`
+      ).run(parentProject, project).changes;
+    });
+    tx();
+
+    logger.debug('SYSTEM', 'Adopted orphaned worktree project', {
+      project, parentProject, observations, summaries,
+    });
+    return { observations, summaries };
+  } finally {
+    db.close();
+  }
+}
