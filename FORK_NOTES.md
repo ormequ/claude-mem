@@ -165,6 +165,43 @@ differ; INSTALL_FORK.md is the *how*.
   independent of worktree discovery — see "Chroma merge-patch" below — so a
   starved tick no longer loses Chroma updates, only delays SQLite adoption of
   newly-merged branches.)
+- `adopt-mem --orphans` reviews memory left by DELETED worktrees
+  (`src/services/infrastructure/OrphanAdoption.ts` + `scripts/adopt-orphans.ts`,
+  both fork-owned). Every adoption path enumerates `git worktree list`
+  (`WorktreeAdoption.ts:179`), so a worktree that no longer exists can never be
+  adopted and its rows keep `merged_into_project IS NULL` forever. Measured
+  2026-07-20: 8 projects, 3886 rows invisible to `kedo`-scoped queries. Root
+  cause was an orca archive hook that was never wired (`automations: []`), so
+  `scripts/adopt-mem` never ran on deletion — the CLI is the cleanup path and
+  the backstop for deletions that bypass the hook (`git worktree remove` by
+  hand).
+  It does NOT decide whether a branch merged: adoption on deletion is
+  unconditional by design (`--branch` skips the merged-check entirely,
+  `WorktreeAdoption.ts:188-190`), so the tool shows facts and a human approves.
+  The only upstream edit this cost: `gitCapture` and `resolveMainRepoPath` in
+  `WorktreeAdoption.ts` gained `export` (two words, nothing else).
+  `listWorktrees` stays unexported and unreused — its upstream body never
+  parses `prunable`, and teaching it to would be a behavioral delta on
+  upstream logic — so the fork ships its own copy in `OrphanAdoption.ts`.
+  Two traps worth keeping. First: a worktree deleted with `rm -rf` stays in
+  `git worktree list` (flagged `prunable`) until `git worktree prune`, so
+  presence in that listing does not mean live — liveness is decided by
+  `existsSync` on the directory. The `prunable` flag is NOT load-bearing:
+  mutation testing 2026-07-21 showed an implementation ignoring it entirely
+  still passes every test, because a prunable entry whose directory still
+  exists and still resolves to a `parent/child` project name is not
+  constructible (git only sets the flag once the gitdir target is missing).
+  It is kept in the code as defense in depth only. Second: the parent project
+  name is a repo basename, so it maps to a SET of repo roots — two clones
+  collide, and picking one arbitrarily would report the other's live
+  worktrees as deleted. Declines live in
+  `~/.claude-mem/state/orphan-decisions.json` with a timestamp and lapse once
+  the project gains rows newer than the decline, so a reused worktree name
+  can't inherit an old `n`. The comparison parses both operands with
+  `Date.parse` and fails open (not suppressed) on `NaN`, because a raw string
+  compare would sort a non-ISO value like SQLite's `datetime('now')` below
+  every ISO decline (space `0x20` < `T` 0x54) and suppress that project
+  forever with no signal.
 - `CLAUDE_MEM_SMART_TOOLS=false|0` removes `smart_search`/`smart_unfold`/
   `smart_outline` from MCP registration (both ListTools and CallTool) and drops
   `smart-explore` from the default skill set. Default: enabled (upstream
