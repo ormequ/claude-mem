@@ -22,9 +22,20 @@ if (repoIndex !== -1 && (!repoPath || repoPath.startsWith('--'))) {
   process.exit(1);
 }
 
+// Whether this run is allowed to write anything at all — the single gate
+// both --reset-declined and the interactive adopt loop below must honor.
+// `--dry-run` and a non-TTY stdin must write NOTHING: not to the database,
+// not to the declines file.
+const mayWrite = Boolean(process.stdin.isTTY) && !dryRun;
+
 if (doReset) {
-  resetDeclines();
-  console.log('Cleared all recorded declines.');
+  if (mayWrite) {
+    resetDeclines();
+    console.log('Cleared all recorded declines.');
+  } else {
+    const count = readDeclines().size;
+    console.log(`(no TTY or --dry-run: would clear ${count} recorded decline${count === 1 ? '' : 's'})`);
+  }
 }
 
 const total = (c: OrphanCandidate) => c.observations + c.summaries;
@@ -57,8 +68,7 @@ if (result.live.length > 0) {
   }
 }
 
-const interactive = Boolean(process.stdin.isTTY) && !dryRun;
-if (!interactive || pending.length === 0) {
+if (!mayWrite || pending.length === 0) {
   if (pending.length > 0) console.log('\n(no TTY or --dry-run: nothing was changed)');
   process.exit(0);
 }
@@ -107,7 +117,11 @@ for (const c of pending) {
     changed = adoptOrphan(c.project, c.parentProject);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    console.log(`  ! the claude-mem worker is busy writing; nothing was adopted for ${c.project}, try again in a moment (${message})`);
+    if (message.includes('database is locked')) {
+      console.log(`  ! the claude-mem worker is busy writing; nothing was adopted for ${c.project}, try again in a moment (${message})`);
+    } else {
+      console.log(`  ! nothing was adopted for ${c.project}: ${message}`);
+    }
     continue;
   }
   adoptedObs += changed.observations;

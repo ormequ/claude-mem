@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# adopt-mem [worktree-dir] [--all] [--dry-run]
+# adopt-mem [worktree-dir] [--all] [--dry-run] [--orphans [--repo <path>] [--reset-declined]]
 #
 # Consolidates a git worktree's claude-mem observations into the parent project
 # via the installed claude-mem fork (ormequ). Safe to call on worktree deletion.
@@ -12,6 +12,12 @@
 #   adopt-mem --dry-run       report what would be adopted, change nothing
 #   adopt-mem --orphans       review worktrees that were DELETED without being
 #                             adopted, and adopt them after approval
+#   adopt-mem --orphans --repo <path>
+#                             also resolve orphan parents against <path>, in
+#                             addition to the known-cwds registry
+#   adopt-mem --orphans --reset-declined
+#                             clear all recorded declines so every previously
+#                             declined orphan is asked about again
 #
 # Canonical copy lives in the claude-mem repo (scripts/adopt-mem). The
 # ~/.local/bin/adopt-mem entry is a symlink to this file so orca (and any

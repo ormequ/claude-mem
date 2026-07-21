@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
@@ -419,5 +419,32 @@ describe('adoptOrphan', () => {
     check.close();
 
     expect(untouched.n).toBe(3);
+  });
+});
+
+describe('adopt-orphans CLI --reset-declined', () => {
+  // The only destructive path in the CLI: `--reset-declined` must be gated
+  // by the same "may write" check as everything else. `paths.dataDir()`
+  // honors CLAUDE_MEM_DATA_DIR (src/shared/paths.ts), so spawn the real
+  // script as a subprocess pointed at an isolated temp dir — never the real
+  // ~/.claude-mem/ — and prove the decisions file is byte-identical after
+  // `--dry-run --reset-declined`.
+  it('leaves the decisions file untouched under --dry-run --reset-declined', () => {
+    const dataDir = makeDataDir([]);
+    recordDecline('demo/old-thing', dataDir);
+    const decisionsFile = path.join(dataDir, 'state', 'orphan-decisions.json');
+    const before = readFileSync(decisionsFile, 'utf-8');
+
+    const scriptPath = path.join(process.cwd(), 'scripts', 'adopt-orphans.ts');
+    const r = spawnSync('bun', [scriptPath, '--dry-run', '--reset-declined'], {
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_MEM_DATA_DIR: dataDir },
+      stdio: ['pipe', 'pipe', 'pipe'], // stdin is a pipe, never a TTY, here
+    });
+
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('would clear 1 recorded decline');
+    const after = readFileSync(decisionsFile, 'utf-8');
+    expect(after).toBe(before);
   });
 });
