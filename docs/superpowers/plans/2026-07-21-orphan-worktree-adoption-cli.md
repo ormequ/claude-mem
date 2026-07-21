@@ -1056,12 +1056,16 @@ In `FORK_NOTES.md`, in the "Local fixes carried by the fork" list, insert immedi
   It does NOT decide whether a branch merged: adoption on deletion is
   unconditional by design (`--branch` skips the merged-check entirely,
   `WorktreeAdoption.ts:188-190`), so the tool shows facts and a human approves.
-  Two traps worth keeping: a worktree deleted with `rm -rf` stays in
-  `git worktree list` flagged `prunable` until `git worktree prune`, so
-  liveness checks both the marker and the directory; and the parent project
-  name is a repo basename, so it maps to a SET of repo roots (two clones
-  collide, and picking one arbitrarily would report the other's live worktrees
-  as deleted). Declines live in `~/.claude-mem/state/orphan-decisions.json`
+  Two traps worth keeping. First: a worktree deleted with `rm -rf` stays in
+  `git worktree list` (flagged `prunable`) until `git worktree prune`, so
+  presence in that listing does not mean live — liveness is decided by
+  `existsSync` on the directory. The `prunable` term in the code is defense in
+  depth only: mutation testing 2026-07-21 showed an implementation ignoring it
+  entirely still passes every test, because git sets the flag exactly when the
+  gitdir target is missing. Do not document it as load-bearing. Second: the
+  parent project name is a repo basename, so it maps to a SET of repo roots —
+  two clones collide, and picking one arbitrarily would report the other's live
+  worktrees as deleted. Declines live in `~/.claude-mem/state/orphan-decisions.json`
   with a timestamp — they lapse once the project gains newer rows, so a reused
   worktree name cannot inherit an old `n`.
 ```
