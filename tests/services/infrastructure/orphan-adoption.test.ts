@@ -127,9 +127,9 @@ describe('scanOrphans', () => {
 
   it('treats an rm -rf worktree as dead even though git still lists it', () => {
     // `git worktree list` keeps showing the entry, flagged `prunable`, until
-    // `git worktree prune` runs. Without an explicit check this orphan would
-    // be classified live and never surface — the exact case this tool exists
-    // for, since manual deletion bypasses the orca archive hook.
+    // `git worktree prune` runs — so presence in that listing does not mean
+    // the worktree is live. Manual deletion bypasses the orca archive hook,
+    // which makes this the case the tool exists for.
     const { mainRepo, worktree } = makeRepoWithWorktree('demo', 'feature-c');
     const dataDir = makeDataDir([mainRepo, worktree]);
     addRows(dataDir, 'demo/feature-c', 4, 0);
