@@ -41,7 +41,7 @@ class DryRunRollback extends Error {
   }
 }
 
-function gitCapture(cwd: string, args: string[]): string | null {
+export function gitCapture(cwd: string, args: string[]): string | null {
   const startTime = Date.now();
   const r = spawnSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
@@ -70,7 +70,7 @@ function gitCapture(cwd: string, args: string[]): string | null {
   return (r.stdout ?? '').trim();
 }
 
-function resolveMainRepoPath(cwd: string): string | null {
+export function resolveMainRepoPath(cwd: string): string | null {
   const commonDir = gitCapture(cwd, [
     'rev-parse',
     '--path-format=absolute',
