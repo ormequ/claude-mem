@@ -13,7 +13,7 @@
 // WorktreeAdoption.ts:188-190), so the tool presents facts and a human
 // approves.
 import path from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { paths } from '../../shared/paths.js';
 import { getProjectContext } from '../../utils/project-name.js';
@@ -46,11 +46,17 @@ interface WorktreeEntry {
 /**
  * Worktrees of `mainRepo`, carrying git's `prunable` marker.
  *
- * The marker matters: a worktree deleted with `rm -rf` (rather than
- * `git worktree remove`) stays in this listing until `git worktree prune`
- * runs, flagged `prunable gitdir file points to non-existent location`.
- * Treating such an entry as live would hide exactly the orphans this module
- * is built to surface.
+ * A worktree deleted with `rm -rf` rather than `git worktree remove` stays in
+ * this listing until `git worktree prune` runs, flagged
+ * `prunable gitdir file points to non-existent location`.
+ *
+ * Note on what actually does the work: `existsSync` in `isLive` is what
+ * catches that case. Git sets `prunable` exactly when the gitdir target is
+ * missing, so a prunable entry whose directory still exists and still
+ * resolves to a `parent/child` project name is not constructible today. The
+ * `prunable` term is kept as defense in depth against future git behavior,
+ * not because any current case depends on it — verified by mutation testing
+ * 2026-07-21.
  */
 function listWorktrees(mainRepo: string): WorktreeEntry[] {
   const raw = gitCapture(mainRepo, ['worktree', 'list', '--porcelain']);
@@ -89,7 +95,7 @@ function isLive(entry: WorktreeEntry): boolean {
  */
 function resolveParentRepos(dataDirectory: string, repoPath?: string): Map<string, Set<string>> {
   const byName = new Map<string, Set<string>>();
-  const seeds = repoPath ? [repoPath] : listKnownCwds(dataDirectory);
+  const seeds = repoPath ? [repoPath, ...listKnownCwds(dataDirectory)] : listKnownCwds(dataDirectory);
   for (const cwd of seeds) {
     const root = resolveMainRepoPath(cwd);
     if (!root) continue;

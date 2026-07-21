@@ -135,10 +135,9 @@ describe('scanOrphans', () => {
     addRows(dataDir, 'demo/feature-c', 4, 0);
     rmSync(worktree, { recursive: true, force: true });
 
-    const listing = spawnSync('git', ['-C', mainRepo, 'worktree', 'list', '--porcelain'],
-      { encoding: 'utf8', env: GIT_ENV }).stdout;
-    expect(listing).toContain('prunable');   // pin the git behavior we rely on
-
+    // `existsSync` in `isLive` is the load-bearing check here, not the
+    // `prunable` marker git attaches to the listing — see the comment on
+    // `listWorktrees`.
     const result = scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual(['demo/feature-c']);
@@ -153,12 +152,13 @@ describe('scanOrphans', () => {
     const dataDir = makeDataDir([
       first.mainRepo, first.worktree, second.mainRepo, second.worktree,
     ]);
+    addRows(dataDir, 'samename/wt-one', 1, 0);
     addRows(dataDir, 'samename/wt-two', 2, 0);
 
     const result = scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual([]);
-    expect(result.live.map(o => o.project)).toEqual(['samename/wt-two']);
+    expect(result.live.map(o => o.project).sort()).toEqual(['samename/wt-one', 'samename/wt-two']);
     expect(result.ambiguousParents).toContain('samename');
   });
 
@@ -183,6 +183,24 @@ describe('scanOrphans', () => {
 
     expect(result.orphans.map(o => o.project)).toEqual(['demo/feature-d']);
     expect(result.skipped).toEqual([]);
+  });
+
+  it('augments the registry with --repo instead of replacing it', () => {
+    // A project resolvable only via the registry, and one resolvable only
+    // via the explicit repoPath — both must be classified, neither skipped.
+    const registryRepo = makeRepoWithWorktree('registry-only', 'feature-f');
+    const explicitRepo = makeRepoWithWorktree('explicit-only', 'feature-g');
+    const dataDir = makeDataDir([registryRepo.mainRepo, registryRepo.worktree]);
+    addRows(dataDir, 'registry-only/feature-f', 1, 0);
+    addRows(dataDir, 'explicit-only/feature-g', 1, 0);
+
+    const result = scanOrphans({ dataDirectory: dataDir, repoPath: explicitRepo.mainRepo });
+
+    expect(result.skipped).toEqual([]);
+    expect(result.live.map(o => o.project).sort()).toEqual([
+      'explicit-only/feature-g',
+      'registry-only/feature-f',
+    ]);
   });
 
   it('ignores rows that are already adopted', () => {
