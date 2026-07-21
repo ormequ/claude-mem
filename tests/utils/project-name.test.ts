@@ -1,7 +1,45 @@
 
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { homedir } from 'os';
 import { getProjectName, getProjectContext } from '../../src/utils/project-name.js';
+
+const originalProjectRoot = process.env.CLAUDE_MEM_PROJECT_ROOT;
+
+let repoRootTmp: string;
+let repoRoot: string;
+let nestedDir: string;
+
+beforeEach(() => {
+  delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+});
+
+beforeAll(async () => {
+  const { mkdtempSync, mkdirSync, realpathSync } = await import('fs');
+  const { execFileSync } = await import('child_process');
+  const { join } = await import('path');
+  const { tmpdir } = await import('os');
+
+  // macOS /tmp symlinks to /private/tmp; realpath so `git --show-toplevel`
+  // (which returns the canonical path) matches our expectations.
+  repoRootTmp = realpathSync(mkdtempSync(join(tmpdir(), 'cm-reporoot-')));
+  repoRoot = join(repoRootTmp, 'my-real-repo');
+  nestedDir = join(repoRoot, 'packages', 'deeply', 'nested');
+  mkdirSync(nestedDir, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+});
+
+afterAll(async () => {
+  const { rmSync } = await import('fs');
+  rmSync(repoRootTmp, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  if (originalProjectRoot === undefined) {
+    delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+  } else {
+    process.env.CLAUDE_MEM_PROJECT_ROOT = originalProjectRoot;
+  }
+});
 
 describe('getProjectName', () => {
   describe('tilde expansion', () => {
@@ -55,30 +93,6 @@ describe('getProjectName', () => {
   });
 
   describe('#2663 — name derived from git repo root', () => {
-    let tmp: string;
-    let repoRoot: string;
-    let nestedDir: string;
-
-    beforeAll(async () => {
-      const { mkdtempSync, mkdirSync, realpathSync } = await import('fs');
-      const { execFileSync } = await import('child_process');
-      const { join } = await import('path');
-      const { tmpdir } = await import('os');
-
-      // macOS /tmp symlinks to /private/tmp; realpath so `git --show-toplevel`
-      // (which returns the canonical path) matches our expectations.
-      tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cm-reporoot-')));
-      repoRoot = join(tmp, 'my-real-repo');
-      nestedDir = join(repoRoot, 'packages', 'deeply', 'nested');
-      mkdirSync(nestedDir, { recursive: true });
-      execFileSync('git', ['init', '-q'], { cwd: repoRoot });
-    });
-
-    afterAll(async () => {
-      const { rmSync } = await import('fs');
-      rmSync(tmp, { recursive: true, force: true });
-    });
-
     it('deep subdirectory inside a repo yields the repo-root name', () => {
       expect(getProjectName(nestedDir)).toBe('my-real-repo');
     });
@@ -172,6 +186,88 @@ describe('getProjectContext', () => {
       expect(project).toBe('main-repo/my-worktree');
       expect(project).not.toBe('main-repo');
       expect(project).not.toBe('my-worktree');
+    });
+
+    describe('CLAUDE_MEM_PROJECT_ROOT override', () => {
+      let initialProjectRoot: string | undefined;
+
+      beforeEach(() => {
+        initialProjectRoot = process.env.CLAUDE_MEM_PROJECT_ROOT;
+      });
+
+      afterEach(() => {
+        if (initialProjectRoot === undefined) {
+          delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+        } else {
+          process.env.CLAUDE_MEM_PROJECT_ROOT = initialProjectRoot;
+        }
+      });
+
+      it('uses the configured root as the complete context regardless of cwd', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext('/unrelated/deeply/nested/directory')).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('uses the configured root as the complete context when cwd is null', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext(null)).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('uses the configured root as the complete context from a worktree', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('derives the configured root name through getProjectName', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = nestedDir;
+
+        expect(getProjectContext('/unrelated/deeply/nested/directory')).toEqual({
+          primary: 'my-real-repo',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['my-real-repo'],
+        });
+      });
+
+      it('treats an empty configured root as unset', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'main-repo/my-worktree',
+          parent: 'main-repo',
+          isWorktree: true,
+          allProjects: ['main-repo', 'main-repo/my-worktree'],
+        });
+      });
+
+      it('treats a whitespace-only configured root as unset', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '   ';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'main-repo/my-worktree',
+          parent: 'main-repo',
+          isWorktree: true,
+          allProjects: ['main-repo', 'main-repo/my-worktree'],
+        });
+      });
     });
   });
 });

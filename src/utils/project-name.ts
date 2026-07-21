@@ -76,6 +76,12 @@ export interface ProjectContext {
 }
 
 export function getProjectContext(cwd: string | null | undefined): ProjectContext {
+  const configuredRoot = process.env.CLAUDE_MEM_PROJECT_ROOT?.trim();
+  if (configuredRoot) {
+    const primary = getProjectName(configuredRoot);
+    return { primary, parent: null, isWorktree: false, allProjects: [primary] };
+  }
+
   const cwdProjectName = getProjectName(cwd);
 
   if (!cwd) {
