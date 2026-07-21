@@ -7,11 +7,17 @@
 #
 #   adopt-mem                 adopt the current worktree's branch
 #   adopt-mem <dir>           adopt the branch checked out in <dir>
-#   adopt-mem --all           scan EVERY worktree of the repo, adopt all merged
-#                             branches (regular + squash-merged)
+#   adopt-mem --all           everything this repo has to adopt: scan EVERY live
+#                             worktree and adopt all merged branches (regular +
+#                             squash-merged), THEN review orphans (below) and
+#                             prompt for each. This is the everyday command.
 #   adopt-mem --dry-run       report what would be adopted, change nothing
-#   adopt-mem --orphans       review worktrees that were DELETED without being
-#                             adopted, and adopt them after approval
+#   adopt-mem --orphans       the orphan review alone, without the worktree scan:
+#                             memory left by worktrees that were DELETED before
+#                             being adopted. They are invisible to the scan above
+#                             because a deleted worktree is not in
+#                             `git worktree list`, so nothing else can ever see
+#                             them. Adopts only after per-item approval.
 #   adopt-mem --orphans --repo <path>
 #                             also resolve orphan parents against <path>, in
 #                             addition to the known-cwds registry
@@ -86,6 +92,19 @@ ws="${ws:-$HOME/Development/tools/claude-mem/plugin/scripts/worker-service.cjs}"
 if [[ ! -f "$ws" ]]; then
   echo "adopt-mem: claude-mem fork worker script not found (ormequ cache / dev checkout)" >&2
   exit 1
+fi
+
+if [[ -n "$all" ]]; then
+  # `--all` means everything this repo has to adopt, and memory left behind by
+  # DELETED worktrees is part of that — the worktree-list-driven pass below can
+  # never see it, because a deleted worktree is absent from `git worktree list`.
+  # So run the normal pass first (its summary prints), then hand over to the
+  # orphan review, which inherits this TTY and prompts per orphan.
+  # Not `exec` on the first one: we need to come back for the second.
+  bun "$ws" adopt --cwd "$dir" ${dryrun:+--dry-run}
+  echo
+  exec bun "$HOME/Development/tools/claude-mem/scripts/adopt-orphans.ts" \
+    --repo "$dir" ${dryrun:+--dry-run}
 fi
 
 exec bun "$ws" adopt --cwd "$dir" ${branch:+--branch "$branch"} ${dryrun:+--dry-run}
