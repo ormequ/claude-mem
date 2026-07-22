@@ -447,6 +447,12 @@ After rebasing or merging upstream:
    so every test that imports a real dependency dies at module resolution
    ("Cannot find module '@modelcontextprotocol/sdk/…'") and reads as a code
    failure when nothing is wrong.
+   Also run the **cross-harness read guardrails** (one per layer that upstream
+   `348d9ee4` scopes — see "All project-level memory reads are cross-harness"):
+   `bun test tests/context/observation-compiler.test.ts tests/worker/http/routes/search-routes-welcome-hint.test.ts tests/worker/search-manager.test.ts tests/worker/SearchManager.timeline-anchor.test.ts tests/worker/http/routes/search-routes-platform-header.test.ts tests/worker/search/search-orchestrator.test.ts tests/worker/search/strategies/hybrid-search-strategy.test.ts tests/worker/http/routes/data-routes-platform-scoping.test.ts`.
+   A merge that reintroduces `platform_source` filtering on any read path fails
+   these — that is the signal to re-drop it (inject/ObservationCompiler,
+   SearchManager, SearchOrchestrator, DataRoutes) before shipping.
 4. Run `claude plugin validate .`.
 5. Install from this checkout, not from a patched cache directory.
 6. Smoke test:
