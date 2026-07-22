@@ -167,12 +167,10 @@ describe('SearchRoutes Welcome Hint', () => {
       '/path/worktree',
       '/path/parent',
       '/path/worktree',
-      null,
-      null,
     );
   });
 
-  it('threads normalized platformSource into observation count and context generation', async () => {
+  it('does not thread platformSource into observation count or context generation (cross-harness)', async () => {
     countQueryStub = mock(() => ({ count: 2 }));
     prepareStub = mock(() => ({ get: countQueryStub }));
     mockSessionStore = { db: { prepare: prepareStub } };
@@ -191,21 +189,22 @@ describe('SearchRoutes Welcome Hint', () => {
     handler(req, res as unknown as Response);
     await new Promise(resolve => setImmediate(resolve));
 
+    // Session-start injection is platform-agnostic: the count query and the
+    // context generator receive NO platform_source, even when the request
+    // carries one — a session sees the whole project's cross-harness memory.
     expect(countQueryStub).toHaveBeenCalledWith(
       '/path/parent',
       '/path/worktree',
       '/path/parent',
       '/path/worktree',
-      'cursor',
-      'cursor',
     );
     expect(generateContextStub).toHaveBeenCalledWith(
       expect.objectContaining({
         projects: ['/path/parent', '/path/worktree'],
-        platformSource: 'cursor',
       }),
       false,
     );
+    expect(generateContextStub.mock.calls[0][0]).not.toHaveProperty('platformSource');
   });
 
   it('does not leak positive observation state across route instances', async () => {

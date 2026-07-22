@@ -140,7 +140,7 @@ describe('buildTimeline', () => {
     });
 });
 
-describe('context compiler platform scoping', () => {
+describe('context compiler cross-harness reads', () => {
   const config: ContextConfig = {
     totalObservationCount: 20,
     fullObservationCount: 3,
@@ -210,7 +210,7 @@ describe('context compiler platform scoping', () => {
     );
   }
 
-  it('filters observations, summaries, and project counts by platformSource when supplied', () => {
+  it('returns observations, summaries, and counts across all harnesses (no platform scoping)', () => {
     const store = new SessionStore(':memory:');
     try {
       seed(store, {
@@ -232,23 +232,21 @@ describe('context compiler platform scoping', () => {
         createdAtEpoch: 1_700_000_001_000,
       });
 
-      const codexObservations = queryObservationsMulti(store, ['context-platform-project'], config, 'codex');
-      expect(codexObservations.map(obs => obs.title)).toEqual(['CODEX_CONTEXT_OBS']);
-      expect(codexObservations[0].platform_source).toBe('codex');
+      // A single session's read sees BOTH the codex- and claude-sourced rows,
+      // newest first — memory is shared across harnesses for the same project.
+      const observations = queryObservationsMulti(store, ['context-platform-project'], config);
+      expect(observations.map(obs => obs.title)).toEqual(['CLAUDE_CONTEXT_OBS', 'CODEX_CONTEXT_OBS']);
 
-      const codexSummaries = querySummariesMulti(store, ['context-platform-project'], config, 'codex');
-      expect(codexSummaries.map(summary => summary.request)).toEqual(['CODEX_CONTEXT_SUMMARY']);
-      expect(codexSummaries[0].platform_source).toBe('codex');
+      const summaries = querySummariesMulti(store, ['context-platform-project'], config);
+      expect(summaries.map(summary => summary.request)).toEqual(['CLAUDE_CONTEXT_SUMMARY', 'CODEX_CONTEXT_SUMMARY']);
 
-      expect(countObservationsByProjects(store, ['context-platform-project'], 'codex')).toBe(1);
-      expect(countObservationsByProjects(store, ['context-platform-project'], 'claude')).toBe(1);
       expect(countObservationsByProjects(store, ['context-platform-project'])).toBe(2);
     } finally {
       store.close();
     }
   });
 
-  it('applies platformSource across multi-project context queries', () => {
+  it('returns every harness across multi-project context queries', () => {
     const store = new SessionStore(':memory:');
     try {
       seed(store, {
@@ -280,11 +278,13 @@ describe('context compiler platform scoping', () => {
       });
 
       const projects = ['context-parent', 'context-worktree'];
-      expect(queryObservationsMulti(store, projects, config, 'codex').map(obs => obs.title)).toEqual([
+      expect(queryObservationsMulti(store, projects, config).map(obs => obs.title)).toEqual([
+        'WORKTREE_CLAUDE_OBS',
         'WORKTREE_CODEX_OBS',
         'PARENT_CODEX_OBS',
       ]);
-      expect(querySummariesMulti(store, projects, config, 'codex').map(summary => summary.request)).toEqual([
+      expect(querySummariesMulti(store, projects, config).map(summary => summary.request)).toEqual([
+        'WORKTREE_CLAUDE_SUMMARY',
         'WORKTREE_CODEX_SUMMARY',
         'PARENT_CODEX_SUMMARY',
       ]);

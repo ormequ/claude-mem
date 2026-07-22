@@ -56,6 +56,23 @@ differ; INSTALL_FORK.md is the *how*.
 
 ## Local fixes carried by the fork
 
+- **Session-start injection is cross-harness (reverts upstream `348d9ee4`
+  "scope memories by platform source" on the read path).** Upstream joins each
+  observation/summary to its originating `sdk_sessions.platform_source` and, on
+  the session-start inject + welcome-hint path, returns only rows produced by
+  the *same* harness — so a Codex session in a project whose memory was built
+  under Claude Code sees "no memory yet" despite sharing the project id. The
+  fork drops that filter in `ObservationCompiler`
+  (`queryObservationsMulti` / `querySummariesMulti` / `countObservationsByProjects`
+  no longer take/apply `platformSource`); `ContextBuilder` and the
+  `/api/context/inject` welcome-hint gate stop threading it. Write-time
+  `platform_source` tagging, per-session recovery, and the harness-scoped
+  `/api/search` + `/api/context/semantic` + by-file paths KEEP their platform
+  filtering — only project-level session-start reads went cross-harness. When
+  re-syncing upstream, re-drop the `AND (? IS NULL OR s.platform_source = ?)`
+  clause from those three compiler queries. Tests:
+  `tests/context/observation-compiler.test.ts` (cross-harness reads) and
+  `tests/worker/http/routes/search-routes-welcome-hint.test.ts`.
 - `server-beta` `observation_add` / `memory_add` sends `content` while keeping
   `narrative` as a legacy alias.
 - MCP `projectId` handling accepts useful aliases such as `MKS` and ignores raw

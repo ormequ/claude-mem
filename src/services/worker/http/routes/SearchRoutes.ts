@@ -92,13 +92,15 @@ export class SearchRoutes extends BaseRouteHandler {
   private projectsHaveObservations(
     sessionStore: ReturnType<SearchManager['getSessionStore']>,
     projects: string[],
-    platformSource?: string,
   ): boolean {
-    const cacheKey = platformSource ? `${platformSource}\0${projects.join('\0')}` : projects.join('\0');
+    // Cross-harness: the welcome hint reflects whether the project has ANY
+    // memory, regardless of which harness produced it — mirrors the
+    // platform-agnostic session-start injection (see ObservationCompiler).
+    const cacheKey = projects.join('\0');
     if (this.projectsKnownNonEmpty.has(cacheKey)) {
       return true;
     }
-    const observationCount = countObservationsByProjects(sessionStore, projects, platformSource);
+    const observationCount = countObservationsByProjects(sessionStore, projects);
     if (observationCount > 0) {
       this.projectsKnownNonEmpty.add(cacheKey);
       return true;
@@ -304,7 +306,7 @@ export class SearchRoutes extends BaseRouteHandler {
       const sessionStore = this.searchManager.getSessionStore();
       // Memoized: skips the COUNT(*) query once any project in the set has
       // observations. Hot-path: PostToolUse fires after every Read/Edit.
-      if (!this.projectsHaveObservations(sessionStore, projects, platformSource)) {
+      if (!this.projectsHaveObservations(sessionStore, projects)) {
         const port = process.env.CLAUDE_MEM_WORKER_PORT ?? settings.CLAUDE_MEM_WORKER_PORT;
         const viewerUrl = `http://localhost:${port}`;
         const hintBody = WELCOME_HINT_TEMPLATE.replace('{viewer_url}', viewerUrl);
@@ -320,11 +322,13 @@ export class SearchRoutes extends BaseRouteHandler {
     const cwd = `/context/${primaryProject}`;
 
     const injectStartedAt = Date.now();
+    // platformSource is intentionally NOT threaded into the injection query:
+    // session-start context is cross-harness (see ObservationCompiler). It is
+    // still read above for request diagnostics/logging only.
     const injectRequest = {
       session_id: 'context-inject-' + Date.now(),
       cwd: cwd,
       projects: projects,
-      ...(platformSource ? { platformSource } : {}),
       full
     };
     let contextResult: Awaited<ReturnType<typeof generateContextWithStats>>;

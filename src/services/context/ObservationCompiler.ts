@@ -15,11 +15,17 @@ import type {
 } from './types.js';
 import { SUMMARY_LOOKAHEAD } from './types.js';
 
+// Project-level context reads are intentionally cross-harness in this fork:
+// a session started under any harness (Claude Code, Codex, …) sees the whole
+// project's memory, not just rows its own platform produced. Sessions are still
+// tagged with their originating platform_source at write time (and the column
+// is surfaced below for display), but session-start injection and its
+// welcome-hint gate never filter by it. Per-session recovery and the
+// harness-scoped /api/search path keep their own platform filtering elsewhere.
 export function queryObservationsMulti(
   db: SessionStore,
   projects: string[],
-  config: ContextConfig,
-  platformSource?: string
+  config: ContextConfig
 ): Observation[] {
   const typeArray = Array.from(config.observationTypes);
   const typePlaceholders = typeArray.map(() => '?').join(',');
@@ -49,7 +55,6 @@ export function queryObservationsMulti(
     LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
     WHERE (o.project IN (${projectPlaceholders})
            OR o.merged_into_project IN (${projectPlaceholders}))
-      AND (? IS NULL OR s.platform_source = ?)
       AND type IN (${typePlaceholders})
       AND EXISTS (
         SELECT 1 FROM json_each(o.concepts)
@@ -60,33 +65,28 @@ export function queryObservationsMulti(
   `).all(
     ...projects,
     ...projects,
-    platformSource ?? null,
-    platformSource ?? null,
     ...typeArray,
     ...conceptArray,
     config.totalObservationCount
   ) as Observation[];
 }
 
-export function countObservationsByProjects(db: SessionStore, projects: string[], platformSource?: string): number {
+export function countObservationsByProjects(db: SessionStore, projects: string[]): number {
   if (projects.length === 0) return 0;
   const projectPlaceholders = projects.map(() => '?').join(',');
   const row = db.db.prepare(`
     SELECT COUNT(*) as count
     FROM observations o
-    LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
     WHERE (o.project IN (${projectPlaceholders})
        OR o.merged_into_project IN (${projectPlaceholders}))
-      AND (? IS NULL OR s.platform_source = ?)
-  `).get(...projects, ...projects, platformSource ?? null, platformSource ?? null) as { count: number } | undefined;
+  `).get(...projects, ...projects) as { count: number } | undefined;
   return row?.count ?? 0;
 }
 
 export function querySummariesMulti(
   db: SessionStore,
   projects: string[],
-  config: ContextConfig,
-  platformSource?: string
+  config: ContextConfig
 ): SessionSummary[] {
   const projectPlaceholders = projects.map(() => '?').join(',');
 
@@ -107,14 +107,11 @@ export function querySummariesMulti(
     LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
     WHERE (ss.project IN (${projectPlaceholders})
            OR ss.merged_into_project IN (${projectPlaceholders}))
-      AND (? IS NULL OR s.platform_source = ?)
     ORDER BY ss.created_at_epoch DESC
     LIMIT ?
   `).all(
     ...projects,
     ...projects,
-    platformSource ?? null,
-    platformSource ?? null,
     config.sessionCount + SUMMARY_LOOKAHEAD
   ) as SessionSummary[];
 }
