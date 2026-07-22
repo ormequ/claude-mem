@@ -211,6 +211,8 @@ describe('SearchRoutes platform-source headers', () => {
         const text = payload.content[0].text as string;
         expect(text).toContain('CURSOR_RECENT_OBS');
         expect(text).toContain('CLAUDE_RECENT_OBS');
+        expect(text).toContain('CURSOR_RECENT_PROMPT');
+        expect(text).toContain('CLAUDE_RECENT_PROMPT');
       }
     } finally {
       store.close();

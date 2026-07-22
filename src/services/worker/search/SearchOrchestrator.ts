@@ -14,7 +14,6 @@ import type {
 } from './types.js';
 import { ChromaUnavailableError } from './errors.js';
 import { logger } from '../../../utils/logger.js';
-import { normalizePlatformSource } from '../../../shared/platform-source.js';
 
 interface NormalizedParams extends StrategySearchOptions {
   concepts?: string[];
@@ -137,12 +136,12 @@ export class SearchOrchestrator {
       delete normalized.dateEnd;
     }
 
-    const rawPlatformSource = normalized.platformSource ?? normalized.platform_source;
-    if (typeof rawPlatformSource === 'string' && rawPlatformSource.trim()) {
-      normalized.platformSource = normalizePlatformSource(rawPlatformSource);
-    } else {
-      delete normalized.platformSource;
-    }
+    // Cross-harness reads (fork): strip platform_source so by-file and
+    // orchestrator search span the whole project's memory regardless of the
+    // requesting harness — mirrors SearchManager.normalizeParams (see
+    // FORK_NOTES). Downstream Chroma/SQLite strategies never receive one, so
+    // the platform-scoped-zero fallback in executeWithFallback is inert.
+    delete normalized.platformSource;
     delete normalized.platform_source;
 
     return normalized;

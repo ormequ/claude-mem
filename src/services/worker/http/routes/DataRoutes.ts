@@ -99,20 +99,20 @@ export class DataRoutes extends BaseRouteHandler {
   }
 
   private handleGetObservations = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getObservations(offset, limit, project, platformSource);
+    const { offset, limit, project } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getObservations(offset, limit, project);
     res.json(result);
   });
 
   private handleGetSummaries = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getSummaries(offset, limit, project, platformSource);
+    const { offset, limit, project } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getSummaries(offset, limit, project);
     res.json(result);
   });
 
   private handleGetPrompts = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getPrompts(offset, limit, project, platformSource);
+    const { offset, limit, project } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getPrompts(offset, limit, project);
     res.json(result);
   });
 
@@ -121,8 +121,9 @@ export class DataRoutes extends BaseRouteHandler {
     if (id === null) return;
 
     const store = this.dbManager.getSessionStore();
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
-    const observation = store.getObservationById(id, platformSource);
+    // Cross-harness: detail/hydration fetches must not re-scope by platform, or
+    // a cross-platform id returned by search would fail to hydrate (FORK_NOTES).
+    const observation = store.getObservationById(id);
 
     if (!observation) {
       this.notFound(res, `Observation #${id} not found`);
@@ -149,10 +150,11 @@ export class DataRoutes extends BaseRouteHandler {
     const projects = projectsParam ? projectsParam.split(',').filter(Boolean) : undefined;
     const parsedLimit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
     const limit = Number.isFinite(parsedLimit) && parsedLimit! > 0 ? parsedLimit : undefined;
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
 
+    // Cross-harness: the PreToolUse:Read by-file hint surfaces observations for
+    // this file from every harness, not just the requesting one (FORK_NOTES).
     const db = this.dbManager.getSessionStore().db;
-    const observations = getObservationsByFilePath(db, candidatePaths, { projects, limit, platformSource });
+    const observations = getObservationsByFilePath(db, candidatePaths, { projects, limit });
 
     res.json({ observations, count: observations.length });
   });
@@ -166,8 +168,7 @@ export class DataRoutes extends BaseRouteHandler {
     }
 
     const store = this.dbManager.getSessionStore();
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
-    const observations = store.getObservationsByIds(ids, { orderBy, limit, project, platformSource });
+    const observations = store.getObservationsByIds(ids, { orderBy, limit, project });
 
     res.json(observations);
   });
@@ -177,9 +178,8 @@ export class DataRoutes extends BaseRouteHandler {
     if (id === null) return;
 
     const store = this.dbManager.getSessionStore();
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
     const project = DataRoutes.firstString(req.query.project);
-    const sessions = store.getSessionSummariesByIds([id], { project, platformSource });
+    const sessions = store.getSessionSummariesByIds([id], { project });
 
     if (sessions.length === 0) {
       this.notFound(res, `Session #${id} not found`);
@@ -202,9 +202,8 @@ export class DataRoutes extends BaseRouteHandler {
     if (id === null) return;
 
     const store = this.dbManager.getSessionStore();
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
     const project = DataRoutes.firstString(req.query.project);
-    const prompts = store.getUserPromptsByIds([id], { project, platformSource });
+    const prompts = store.getUserPromptsByIds([id], { project });
 
     if (prompts.length === 0) {
       this.notFound(res, `Prompt #${id} not found`);
@@ -279,13 +278,13 @@ export class DataRoutes extends BaseRouteHandler {
     res.json({ isProcessing, queueDepth });
   });
 
-  private parsePaginationParams(req: Request): { offset: number; limit: number; project?: string; platformSource?: string } {
+  private parsePaginationParams(req: Request): { offset: number; limit: number; project?: string } {
     const offset = parseInt(req.query.offset as string, 10) || 0;
-    const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100); 
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
     const project = req.query.project as string | undefined;
-    const platformSource = this.getOptionalPlatformSourceFromRequest(req);
-
-    return { offset, limit, project, platformSource };
+    // Cross-harness: viewer browse lists are not scoped by the requesting
+    // harness's platform_source (see FORK_NOTES). Reads span all platforms.
+    return { offset, limit, project };
   }
 
   private handleImport = this.wrapHandler((req: Request, res: Response): void => {

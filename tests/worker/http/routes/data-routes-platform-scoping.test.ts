@@ -82,7 +82,7 @@ function insertPrompt(
   return Number(result.lastInsertRowid);
 }
 
-describe('DataRoutes platform-scoped hydration', () => {
+describe('DataRoutes cross-harness hydration (platform_source ignored on reads)', () => {
   let store: SessionStore;
   let routes: DataRoutes;
   const project = 'data-route-platform-scope';
@@ -192,9 +192,12 @@ describe('DataRoutes platform-scoped hydration', () => {
     };
   }
 
-  it('scopes batch observations, summaries, prompts, and by-file results by platform', () => {
+  it('hydrates batch, session, prompt, and by-file cross-harness even when a platform is requested', () => {
     const ids = seedPlatformRows();
 
+    // Batch hydration: requesting platform_source=cursor still returns BOTH the
+    // claude- and cursor-sourced rows — ids come from cross-harness search, so
+    // the fetch must not re-scope (else the claude id would silently drop).
     const batchHandler = captureRoute(routes, 'post', '/api/observations/batch');
     const batchResponse = makeResponse();
     batchHandler(makeRequest({
@@ -203,50 +206,67 @@ describe('DataRoutes platform-scoped hydration', () => {
         platform_source: 'cursor',
       },
     }), batchResponse.res);
-    expect(batchResponse.json).toHaveBeenCalledWith([
+    const batchArg = batchResponse.json.mock.calls[0][0] as any[];
+    expect(batchArg).toHaveLength(2);
+    expect(batchArg).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ids.claudeObservationId, title: 'CLAUDE_ROUTE_OBS' }),
       expect.objectContaining({ id: ids.cursorObservationId, title: 'CURSOR_ROUTE_OBS' }),
-    ]);
+    ]));
 
+    // Cross-platform single-summary lookup now succeeds instead of 404.
     const sessionHandler = captureRoute(routes, 'get', '/api/session/:id');
     const sessionResponse = makeResponse();
     sessionHandler(makeRequest({
       params: { id: String(ids.claudeSummaryId) },
       query: { platformSource: 'cursor' },
     }), sessionResponse.res);
-    expect(sessionResponse.status).toHaveBeenCalledWith(404);
+    expect(sessionResponse.status).not.toHaveBeenCalledWith(404);
+    expect(sessionResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ids.claudeSummaryId, request: 'CLAUDE_ROUTE_SUMMARY' })
+    );
 
+    // Cross-platform single-prompt lookup now succeeds instead of 404.
     const promptHandler = captureRoute(routes, 'get', '/api/prompt/:id');
     const promptResponse = makeResponse();
     promptHandler(makeRequest({
       params: { id: String(ids.claudePromptId) },
       query: { platform_source: 'cursor' },
     }), promptResponse.res);
-    expect(promptResponse.status).toHaveBeenCalledWith(404);
+    expect(promptResponse.status).not.toHaveBeenCalledWith(404);
+    expect(promptResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt_text: 'CLAUDE_ROUTE_PROMPT' })
+    );
 
+    // by-file Read hint: surfaces observations from every harness for the file.
     const byFileHandler = captureRoute(routes, 'get', '/api/observations/by-file');
     const byFileResponse = makeResponse();
     byFileHandler(makeRequest({
       query: { path: filePath, projects: project },
       headers: { 'x-platform-source': 'cursor' },
     }), byFileResponse.res);
-    expect(byFileResponse.json).toHaveBeenCalledWith({
-      observations: [
-        expect.objectContaining({ id: ids.cursorObservationId, title: 'CURSOR_ROUTE_OBS' }),
-      ],
-      count: 1,
-    });
+    const byFileArg = byFileResponse.json.mock.calls[0][0] as { observations: any[]; count: number };
+    expect(byFileArg.count).toBe(2);
+    expect(byFileArg.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ids.claudeObservationId, title: 'CLAUDE_ROUTE_OBS' }),
+      expect.objectContaining({ id: ids.cursorObservationId, title: 'CURSOR_ROUTE_OBS' }),
+    ]));
   });
 
-  it('scopes single observation lookup by requested platform', () => {
+  it('hydrates a single observation cross-harness regardless of requested platform', () => {
     const ids = seedPlatformRows();
     const handler = captureRoute(routes, 'get', '/api/observation/:id');
 
+    // A claude-sourced id fetched with platformSource=cursor now hydrates
+    // (previously 404) — this is what makes cross-harness search results usable.
     const mismatchResponse = makeResponse();
     handler(makeRequest({
       params: { id: String(ids.claudeObservationId) },
       query: { platformSource: 'cursor' },
     }), mismatchResponse.res);
-    expect(mismatchResponse.status).toHaveBeenCalledWith(404);
+    expect(mismatchResponse.status).not.toHaveBeenCalledWith(404);
+    expect(mismatchResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ids.claudeObservationId, title: 'CLAUDE_ROUTE_OBS' })
+    );
 
     const matchResponse = makeResponse();
     handler(makeRequest({

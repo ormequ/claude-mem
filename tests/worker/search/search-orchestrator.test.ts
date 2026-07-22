@@ -20,8 +20,12 @@ const observation = {
   created_at_epoch: 1735689600000,
 };
 
-describe('SearchOrchestrator platform-scoped Chroma zero fallback', () => {
-  it('falls back to SQLiteStrategy when platform-scoped Chroma search returns no rows', async () => {
+describe('SearchOrchestrator cross-harness search (platform_source ignored on reads)', () => {
+  // NOTE: the old "platform-scoped Chroma zero → SQLite fallback" case is gone.
+  // normalizeParams strips platformSource, so no scoped-zero can occur through
+  // the public search() API; an empty Chroma result is always final (below),
+  // and the where-filter never carries a platform_source clause.
+  it('ignores a requested platform_source in the Chroma where filter', async () => {
     const queryChroma = mock(() => Promise.resolve({ ids: [], distances: [], metadatas: [] }));
     const searchObservations = mock(() => [observation]);
     const orchestrator = new SearchOrchestrator(
@@ -46,18 +50,16 @@ describe('SearchOrchestrator platform-scoped Chroma zero fallback', () => {
       limit: 5,
     });
 
+    // No { platform_source: ... } clause; empty Chroma is final (no FTS fallback).
     expect(queryChroma).toHaveBeenCalledWith(
       'legacy docs',
       100,
-      { $and: [{ doc_type: 'observation' }, { $or: [{ project: 'orchestrator-project' }, { merged_into_project: 'orchestrator-project' }] }, { platform_source: 'cursor' }] },
+      { $and: [{ doc_type: 'observation' }, { $or: [{ project: 'orchestrator-project' }, { merged_into_project: 'orchestrator-project' }] }] },
     );
-    expect(searchObservations).toHaveBeenCalledWith('legacy docs', expect.objectContaining({
-      project: 'orchestrator-project',
-      platformSource: 'cursor',
-    }));
-    expect(result.usedChroma).toBe(false);
-    expect(result.strategy).toBe('sqlite');
-    expect(result.results.observations).toEqual([observation]);
+    expect(searchObservations).not.toHaveBeenCalled();
+    expect(result.usedChroma).toBe(true);
+    expect(result.strategy).toBe('chroma');
+    expect(result.results.observations).toHaveLength(0);
   });
 
   it('keeps unscoped Chroma zero matches final', async () => {
