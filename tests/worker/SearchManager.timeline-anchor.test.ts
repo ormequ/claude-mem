@@ -234,7 +234,7 @@ describe('SearchManager.timeline() anchor dispatch', () => {
     expect(text).toContain('Observation #99999999 not found');
   });
 
-  it('(g) query mode scopes timeline hydration to the requested platform', async () => {
+  it('(g) query mode timeline is cross-harness (surfaces every platform, ignores platform_source)', async () => {
     const project = 'timeline-platform-scope';
     const contentSessionId = 'shared-platform-timeline-raw-id';
     const baseEpoch = Date.UTC(2024, 1, 1, 0, 0, 0);
@@ -263,7 +263,7 @@ describe('SearchManager.timeline() anchor dispatch', () => {
         title: 'CLAUDE_LEAK_OBS',
         subtitle: null,
         facts: [],
-        narrative: 'claude-only context that must not appear in cursor timelines',
+        narrative: 'claude-sourced context that now appears alongside cursor rows (cross-harness)',
         concepts: [],
         files_read: ['src/platform.ts'],
         files_modified: [],
@@ -334,8 +334,10 @@ describe('SearchManager.timeline() anchor dispatch', () => {
     expect(text).toContain('CURSOR_SCOPE_ANCHOR');
     expect(text).toContain('CURSOR_SCOPE_SUMMARY');
     expect(text).toContain('CURSOR_SCOPE_PROMPT');
-    expect(text).not.toContain('CLAUDE_LEAK_OBS');
-    expect(text).not.toContain('CLAUDE_LEAK_SUMMARY');
-    expect(text).not.toContain('CLAUDE_LEAK_PROMPT');
+    // Cross-harness: claude-sourced neighbours now surface in the same timeline
+    // even though the query carried platform_source: 'cursor' (ignored on reads).
+    expect(text).toContain('CLAUDE_LEAK_OBS');
+    expect(text).toContain('CLAUDE_LEAK_SUMMARY');
+    expect(text).toContain('CLAUDE_LEAK_PROMPT');
   });
 });

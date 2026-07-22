@@ -1,8 +1,8 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { SearchManager } from '../../src/services/worker/SearchManager.js';
 
-describe('SearchManager platform-scoped Chroma hydration', () => {
-  it('passes platformSource into Chroma observation where filter and SQLite hydration', async () => {
+describe('SearchManager cross-harness hydration (platform_source ignored on reads)', () => {
+  it('ignores platformSource in Chroma observation where filter and SQLite hydration', async () => {
     const observation = {
       id: 5,
       memory_session_id: 'cursor-memory-id',
@@ -63,17 +63,15 @@ describe('SearchManager platform-scoped Chroma hydration', () => {
       $and: [
         { doc_type: 'observation' },
         { $or: [{ project: 'search-project' }, { merged_into_project: 'search-project' }] },
-        { platform_source: 'cursor' },
       ],
     });
-    expect(getObservationsByIds).toHaveBeenCalledWith([observation.id], expect.objectContaining({
-      platformSource: 'cursor',
-      project: 'search-project',
-    }));
+    const obsHydrationArg = getObservationsByIds.mock.calls[0][1];
+    expect(obsHydrationArg).toEqual(expect.objectContaining({ project: 'search-project' }));
+    expect(obsHydrationArg).not.toHaveProperty('platformSource');
     expect(result.observations).toEqual([observation]);
   });
 
-  it('passes platformSource into Chroma session where filter and SQLite hydration', async () => {
+  it('ignores platformSource in Chroma session where filter and SQLite hydration', async () => {
     const session = {
       id: 6,
       memory_session_id: 'cursor-memory-id',
@@ -133,19 +131,18 @@ describe('SearchManager platform-scoped Chroma hydration', () => {
       $and: [
         { doc_type: 'session_summary' },
         { $or: [{ project: 'search-project' }, { merged_into_project: 'search-project' }] },
-        { platform_source: 'cursor' },
       ],
     });
     expect(getSessionSummariesByIds).toHaveBeenCalledWith([session.id], {
       orderBy: 'date_desc',
       limit: 10,
       project: 'search-project',
-      platformSource: 'cursor',
+      platformSource: undefined,
     });
     expect(result.sessions).toEqual([session]);
   });
 
-  it('passes platformSource into Chroma prompt SQLite hydration', async () => {
+  it('ignores platformSource in Chroma prompt SQLite hydration', async () => {
     const prompt = {
       id: 7,
       content_session_id: 'shared-raw-id',
@@ -198,12 +195,12 @@ describe('SearchManager platform-scoped Chroma hydration', () => {
       orderBy: 'date_desc',
       limit: 10,
       project: 'search-project',
-      platformSource: 'cursor',
+      platformSource: undefined,
     });
     expect(result.prompts).toEqual([prompt]);
   });
 
-  it('passes platformSource into getTimelineByQuery auto-mode hydration', async () => {
+  it('ignores platformSource in getTimelineByQuery auto-mode hydration', async () => {
     const observation = {
       id: 8,
       memory_session_id: 'cursor-memory-id',
@@ -255,7 +252,7 @@ describe('SearchManager platform-scoped Chroma hydration', () => {
 
     expect(searchObservations).toHaveBeenCalledWith('timeline', {
       project: 'search-project',
-      platformSource: 'cursor',
+      platformSource: undefined,
       limit: 1,
     });
     expect(getTimelineAroundObservation).toHaveBeenCalledWith(
@@ -264,117 +261,15 @@ describe('SearchManager platform-scoped Chroma hydration', () => {
       10,
       10,
       'search-project',
-      'cursor',
+      undefined,
     );
   });
 
-  it('falls back to scoped SQLite/FTS when platform-scoped Chroma returns zero matches', async () => {
-    const observation = {
-      id: 9,
-      memory_session_id: 'cursor-memory-id',
-      project: 'search-project',
-      text: null,
-      type: 'discovery',
-      title: 'cursor fallback observation',
-      subtitle: null,
-      facts: '[]',
-      narrative: 'cursor fallback narrative',
-      concepts: '[]',
-      files_read: '[]',
-      files_modified: '[]',
-      prompt_number: 1,
-      discovery_tokens: 0,
-      created_at: new Date().toISOString(),
-      created_at_epoch: Date.now(),
-    };
-    const session = {
-      id: 10,
-      memory_session_id: 'cursor-memory-id',
-      project: 'search-project',
-      request: 'cursor fallback session',
-      investigated: null,
-      learned: null,
-      completed: null,
-      next_steps: null,
-      files_read: null,
-      files_edited: null,
-      notes: null,
-      prompt_number: 1,
-      discovery_tokens: 0,
-      created_at: new Date().toISOString(),
-      created_at_epoch: Date.now(),
-    };
-    const prompt = {
-      id: 11,
-      content_session_id: 'shared-raw-id',
-      prompt_number: 1,
-      prompt_text: 'cursor fallback prompt',
-      project: 'search-project',
-      platform_source: 'cursor',
-      created_at: new Date().toISOString(),
-      created_at_epoch: Date.now(),
-    };
-    const searchObservations = mock(() => [observation]);
-    const searchSessions = mock(() => [session]);
-    const searchUserPrompts = mock(() => [prompt]);
-    const queryChroma = mock(() => Promise.resolve({
-      ids: [],
-      distances: [],
-      metadatas: [],
-    }));
-
-    const manager = new SearchManager(
-      {
-        searchObservations,
-        searchSessions,
-        searchUserPrompts,
-      } as any,
-      {
-        getObservationsByIds: mock(() => []),
-        getSessionSummariesByIds: mock(() => []),
-        getUserPromptsByIds: mock(() => []),
-      } as any,
-      { queryChroma } as any,
-      {} as any,
-      {} as any,
-    );
-    const telemetry = {};
-
-    const result = await manager.search({
-      query: 'legacy metadata',
-      project: 'search-project',
-      platformSource: 'cursor',
-      format: 'json',
-      limit: 10,
-    }, telemetry);
-
-    expect(searchObservations).toHaveBeenCalledWith('legacy metadata', expect.objectContaining({
-      project: 'search-project',
-      platformSource: 'cursor',
-    }));
-    expect(searchSessions).toHaveBeenCalledWith('legacy metadata', expect.objectContaining({
-      project: 'search-project',
-      platformSource: 'cursor',
-    }));
-    expect(searchUserPrompts).toHaveBeenCalledWith('legacy metadata', expect.objectContaining({
-      project: 'search-project',
-      platformSource: 'cursor',
-    }));
-    expect(result).toEqual(expect.objectContaining({
-      observations: [observation],
-      sessions: [session],
-      prompts: [prompt],
-      totalResults: 3,
-    }));
-    expect(telemetry).toEqual(expect.objectContaining({
-      result_count: 3,
-      search_strategy: 'fts',
-      chroma_available: true,
-      fallback_reason: 'chroma_error',
-    }));
-  });
-
-  it('keeps unscoped Chroma zero matches final without SQLite/FTS fallback', async () => {
+  // NOTE: the old "platform-scoped Chroma zero → FTS fallback" case is gone.
+  // Reads are cross-harness now (normalizeParams strips platformSource), so a
+  // scoped-zero result can no longer occur through the public search() API; an
+  // empty Chroma result is always treated as final — covered below.
+  it('keeps Chroma zero matches final without SQLite/FTS fallback', async () => {
     const searchObservations = mock(() => []);
     const searchSessions = mock(() => []);
     const searchUserPrompts = mock(() => []);

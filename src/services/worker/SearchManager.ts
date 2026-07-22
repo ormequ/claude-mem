@@ -289,15 +289,15 @@ export class SearchManager {
       normalized.isFolder = false;
     }
 
-    // Source-scoping (#2389): normalize the platform_source filter so that a
-    // codex/cursor/etc. agent only sees its own memory. Accept both the
-    // camelCase API param and the snake_case column name for robustness.
-    const rawPlatformSource = normalized.platformSource ?? normalized.platform_source;
-    if (typeof rawPlatformSource === 'string' && rawPlatformSource.trim()) {
-      normalized.platformSource = normalizePlatformSource(rawPlatformSource);
-    } else {
-      delete normalized.platformSource;
-    }
+    // Cross-harness reads (fork): search is platform-agnostic, mirroring
+    // session-start injection (see ObservationCompiler / FORK_NOTES). Upstream
+    // #2389 scoped every search to the requesting agent's own platform_source;
+    // this fork strips it so mem-search, semantic context, and by-file Read
+    // hints surface the whole project's memory regardless of which harness
+    // produced it. Sessions are still tagged at write time; the SessionStore
+    // scoping capability stays intact for any per-platform caller. Downstream
+    // platform_source where-filters simply never receive a value now.
+    delete normalized.platformSource;
     delete normalized.platform_source;
 
     return normalized;

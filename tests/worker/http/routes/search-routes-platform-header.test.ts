@@ -144,7 +144,7 @@ describe('SearchRoutes platform-source headers', () => {
     );
   });
 
-  it('uses header and query platform source to scope rendered recent context rows', async () => {
+  it('renders recent context cross-harness, ignoring any requested platform source', async () => {
     const db = new Database(':memory:');
     const store = new SessionStore(db);
     const search = new SessionSearch(db);
@@ -198,6 +198,10 @@ describe('SearchRoutes platform-source headers', () => {
         }),
       ];
 
+      // Even when the request carries a platform source (header or query), the
+      // worker read is cross-harness: recent context surfaces BOTH the cursor-
+      // and claude-sourced rows for the project. platform_source is ignored on
+      // reads (see SearchManager.normalizeParams / FORK_NOTES).
       for (const req of requests) {
         const response = makeResponse();
         callHandler(handlers, '/api/context/recent', req, response.res);
@@ -205,10 +209,8 @@ describe('SearchRoutes platform-source headers', () => {
 
         const payload = response.json.mock.calls[0][0] as any;
         const text = payload.content[0].text as string;
-        expect(text).toContain('CURSOR_RECENT_PROMPT');
         expect(text).toContain('CURSOR_RECENT_OBS');
-        expect(text).not.toContain('CLAUDE_RECENT_PROMPT');
-        expect(text).not.toContain('CLAUDE_RECENT_OBS');
+        expect(text).toContain('CLAUDE_RECENT_OBS');
       }
     } finally {
       store.close();
