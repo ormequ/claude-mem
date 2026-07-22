@@ -144,6 +144,8 @@ let adoptedObs = 0;
 let adoptedSums = 0;
 let adoptAll = false;
 
+console.log('\n  y = adopt into parent   n = skip & remember   a = adopt all remaining   q = quit');
+
 for (const c of pending) {
   let answer = 'y';
   if (!adoptAll) {
