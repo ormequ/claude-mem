@@ -31,9 +31,29 @@ person's identifying detail. Two consequences, both permanent:
   2026-08-15 at ~24.6k objects, which can crawl for an hour. Budget for it once;
   after that the remote is incremental like any other.
 
-Merging upstream in: `git fetch upstream` then merge `upstream/main`. There is no
-local mirror branch to keep any more — the mirror existed to make "Sync fork"
-and the server-side PATCH usable, and both are gone. The `upstream` remote
+**The squash also cut the shared ancestry, so an upstream merge has no base to
+compute from.** `main` is a single root commit; `git merge upstream/main` would
+refuse outright, and `--allow-unrelated-histories` would treat every file as a
+conflict. Merge from the recorded base instead — the upstream commit this tree
+was last merged with:
+
+```
+fork base: 132b4634  ("docs: update changelog for v13.12.4", upstream v13.12.4)
+git fetch upstream main --no-tags --filter=blob:none
+git diff 132b4634..upstream/main | git apply -3      # 3-way: conflicts only where both moved
+```
+
+**Update the recorded base to the new upstream tip every time upstream is
+adopted** — it is the only thing standing in for the missing merge base, and a
+stale one silently re-applies changes that are already in.
+
+The clone is partial (`--filter=blob:none`): commits and trees are local, file
+contents are fetched on demand, so the first diff against an old revision pauses
+to download blobs and nothing works offline. A plain `git fetch upstream` fills
+the history in completely if that ever becomes annoying.
+
+There is no local mirror branch to keep any more — the mirror existed to make
+"Sync fork" and the server-side PATCH usable, and both are gone. The `upstream` remote
 (`git@github.com:thedotmack/claude-mem.git`) is push-disabled on purpose
 (`git remote set-url --push upstream DISABLED_no_push`); keep it that way.
 
