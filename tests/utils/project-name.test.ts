@@ -1,0 +1,344 @@
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
+import { homedir } from 'os';
+import { getProjectName, getProjectContext } from '../../src/utils/project-name.js';
+
+const originalProjectRoot = process.env.CLAUDE_MEM_PROJECT_ROOT;
+
+let repoRootTmp: string;
+let repoRoot: string;
+let nestedDir: string;
+
+beforeEach(() => {
+  delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+});
+
+beforeAll(async () => {
+  const { mkdtempSync, mkdirSync, realpathSync } = await import('fs');
+  const { execFileSync } = await import('child_process');
+  const { join } = await import('path');
+  const { tmpdir } = await import('os');
+
+  // macOS /tmp symlinks to /private/tmp; realpath so `git --show-toplevel`
+  // (which returns the canonical path) matches our expectations.
+  repoRootTmp = realpathSync(mkdtempSync(join(tmpdir(), 'cm-reporoot-')));
+  repoRoot = join(repoRootTmp, 'my-real-repo');
+  nestedDir = join(repoRoot, 'packages', 'deeply', 'nested');
+  mkdirSync(nestedDir, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+});
+
+afterAll(async () => {
+  const { rmSync } = await import('fs');
+  rmSync(repoRootTmp, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  if (originalProjectRoot === undefined) {
+    delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+  } else {
+    process.env.CLAUDE_MEM_PROJECT_ROOT = originalProjectRoot;
+  }
+});
+
+describe('getProjectName', () => {
+  describe('tilde expansion', () => {
+    it('resolves bare ~ to home directory basename', () => {
+      const home = homedir();
+      const expected = home.split('/').pop() || home.split('\\').pop() || '';
+      expect(getProjectName('~')).toBe(expected);
+    });
+
+    it('resolves ~/subpath to subpath', () => {
+      expect(getProjectName('~/projects/my-app')).toBe('my-app');
+    });
+
+    it('resolves ~/ to home directory basename', () => {
+      const home = homedir();
+      const expected = home.split('/').pop() || home.split('\\').pop() || '';
+      expect(getProjectName('~/')).toBe(expected);
+    });
+  });
+
+  describe('normal paths', () => {
+    it('extracts basename from absolute path', () => {
+      expect(getProjectName('/home/user/my-project')).toBe('my-project');
+    });
+
+    it('extracts basename from nested path', () => {
+      expect(getProjectName('/Users/test/work/deep/nested/project')).toBe('project');
+    });
+
+    it('handles trailing slash', () => {
+      expect(getProjectName('/home/user/my-project/')).toBe('my-project');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns unknown-project for null', () => {
+      expect(getProjectName(null)).toBe('unknown-project');
+    });
+
+    it('returns unknown-project for undefined', () => {
+      expect(getProjectName(undefined)).toBe('unknown-project');
+    });
+
+    it('returns unknown-project for empty string', () => {
+      expect(getProjectName('')).toBe('unknown-project');
+    });
+
+    it('returns unknown-project for whitespace', () => {
+      expect(getProjectName('   ')).toBe('unknown-project');
+    });
+  });
+
+  describe('#2663 — name derived from git repo root', () => {
+    it('deep subdirectory inside a repo yields the repo-root name', () => {
+      expect(getProjectName(nestedDir)).toBe('my-real-repo');
+    });
+
+    it('repo root itself yields the repo-root name', () => {
+      expect(getProjectName(repoRoot)).toBe('my-real-repo');
+    });
+
+    it('non-repo path falls back to basename(cwd)', () => {
+      // A path that does not exist (and therefore cannot be in a repo) must
+      // fall back to basename(cwd) rather than throwing or returning a root.
+      expect(getProjectName('/no/such/dir/standalone-folder')).toBe('standalone-folder');
+    });
+  });
+
+  describe('realistic scenarios from #1478', () => {
+    it('handles ~ the same as full home path', () => {
+      const home = homedir();
+      expect(getProjectName('~')).toBe(getProjectName(home));
+    });
+
+    it('handles ~/projects/app the same as /full/path/projects/app', () => {
+      const home = homedir();
+      expect(getProjectName('~/projects/app')).toBe(
+        getProjectName(`${home}/projects/app`)
+      );
+    });
+  });
+});
+
+describe('getProjectContext', () => {
+  it('returns primary project name for normal path', () => {
+    const ctx = getProjectContext('/home/user/my-project');
+    expect(ctx.primary).toBe('my-project');
+    expect(ctx.parent).toBeNull();
+    expect(ctx.isWorktree).toBe(false);
+    expect(ctx.allProjects).toEqual(['my-project']);
+  });
+
+  it('resolves ~ path correctly', () => {
+    const home = homedir();
+    const ctx = getProjectContext('~');
+    const ctxHome = getProjectContext(home);
+    expect(ctx.primary).toBe(ctxHome.primary);
+  });
+
+  it('returns unknown-project context for null', () => {
+    const ctx = getProjectContext(null);
+    expect(ctx.primary).toBe('unknown-project');
+    expect(ctx.parent).toBeNull();
+  });
+
+  describe('worktree isolation', () => {
+    let tmp: string;
+    let mainRepo: string;
+    let worktreeCheckout: string;
+
+    beforeAll(async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync } = await import('fs');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
+
+      tmp = mkdtempSync(join(tmpdir(), 'cm-wt-'));
+      mainRepo = join(tmp, 'main-repo');
+      const worktreeGitDir = join(mainRepo, '.git', 'worktrees', 'my-worktree');
+      worktreeCheckout = join(tmp, 'my-worktree');
+
+      mkdirSync(worktreeGitDir, { recursive: true });
+      mkdirSync(worktreeCheckout, { recursive: true });
+      writeFileSync(
+        join(worktreeCheckout, '.git'),
+        `gitdir: ${worktreeGitDir}\n`
+      );
+    });
+
+    afterAll(async () => {
+      const { rmSync } = await import('fs');
+      rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it('uses parent/worktree composite as primary when in a worktree', () => {
+      const ctx = getProjectContext(worktreeCheckout);
+      expect(ctx.isWorktree).toBe(true);
+      expect(ctx.primary).toBe('main-repo/my-worktree');
+      expect(ctx.parent).toBe('main-repo');
+      expect(ctx.allProjects).toEqual(['main-repo', 'main-repo/my-worktree']);
+    });
+
+    it('write-path call sites resolve to composite name in worktrees', () => {
+      const project = getProjectContext(worktreeCheckout).primary;
+      expect(project).toBe('main-repo/my-worktree');
+      expect(project).not.toBe('main-repo');
+      expect(project).not.toBe('my-worktree');
+    });
+
+    describe('CLAUDE_MEM_PROJECT_ROOT override', () => {
+      let initialProjectRoot: string | undefined;
+
+      beforeEach(() => {
+        initialProjectRoot = process.env.CLAUDE_MEM_PROJECT_ROOT;
+      });
+
+      afterEach(() => {
+        if (initialProjectRoot === undefined) {
+          delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+        } else {
+          process.env.CLAUDE_MEM_PROJECT_ROOT = initialProjectRoot;
+        }
+      });
+
+      it('uses the configured root as the complete context regardless of cwd', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext('/unrelated/deeply/nested/directory')).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('uses the configured root as the complete context when cwd is null', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext(null)).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('uses the configured root as the complete context from a worktree', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '/configured/forced-project';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'forced-project',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['forced-project'],
+        });
+      });
+
+      it('derives the configured root name through getProjectName', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = nestedDir;
+
+        expect(getProjectContext('/unrelated/deeply/nested/directory')).toEqual({
+          primary: 'my-real-repo',
+          parent: null,
+          isWorktree: false,
+          allProjects: ['my-real-repo'],
+        });
+      });
+
+      it('treats an empty configured root as unset', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'main-repo/my-worktree',
+          parent: 'main-repo',
+          isWorktree: true,
+          allProjects: ['main-repo', 'main-repo/my-worktree'],
+        });
+      });
+
+      it('treats a whitespace-only configured root as unset', () => {
+        process.env.CLAUDE_MEM_PROJECT_ROOT = '   ';
+
+        expect(getProjectContext(worktreeCheckout)).toEqual({
+          primary: 'main-repo/my-worktree',
+          parent: 'main-repo',
+          isWorktree: true,
+          allProjects: ['main-repo', 'main-repo/my-worktree'],
+        });
+      });
+    });
+  });
+
+  // #3262 — detectWorktree must run at the git worktree root, not raw cwd.
+  // A session started in a subdirectory of a worktree must keep the same
+  // parent/worktree compound key as a session at the worktree root.
+  describe('#3262 — worktree compound key from subdirectory', () => {
+    let tmp: string;
+    let worktreeCheckout: string;
+    let worktreeSubdir: string;
+
+    beforeAll(async () => {
+      const { mkdtempSync, mkdirSync, realpathSync, writeFileSync } = await import('fs');
+      const { execFileSync } = await import('child_process');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
+
+      tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cm-wt-subdir-')));
+      const mainRepo = join(tmp, 'main-repo');
+      worktreeCheckout = join(tmp, 'feature-x');
+      worktreeSubdir = join(worktreeCheckout, 'packages', 'nested');
+
+      mkdirSync(mainRepo, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: mainRepo });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: mainRepo });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: mainRepo });
+      writeFileSync(join(mainRepo, 'README'), 'init\n');
+      execFileSync('git', ['add', '.'], { cwd: mainRepo });
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: mainRepo });
+      execFileSync('git', ['worktree', 'add', '-q', worktreeCheckout, '-b', 'feature-x'], {
+        cwd: mainRepo,
+      });
+      mkdirSync(worktreeSubdir, { recursive: true });
+    });
+
+    afterAll(async () => {
+      const { rmSync } = await import('fs');
+      const { execFileSync } = await import('child_process');
+      const { join } = await import('path');
+      try {
+        execFileSync('git', ['worktree', 'remove', '--force', worktreeCheckout], {
+          cwd: join(tmp, 'main-repo'),
+        });
+      } catch {
+        // Best-effort cleanup; rmSync below still removes the temp tree.
+      }
+      rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it('worktree root yields parent/worktree composite', () => {
+      const ctx = getProjectContext(worktreeCheckout);
+      expect(ctx.isWorktree).toBe(true);
+      expect(ctx.primary).toBe('main-repo/feature-x');
+      expect(ctx.parent).toBe('main-repo');
+      expect(ctx.allProjects).toEqual(['main-repo', 'main-repo/feature-x']);
+    });
+
+    it('subdirectory of a worktree yields the same composite key', () => {
+      const ctx = getProjectContext(worktreeSubdir);
+      expect(ctx.isWorktree).toBe(true);
+      expect(ctx.primary).toBe('main-repo/feature-x');
+      expect(ctx.parent).toBe('main-repo');
+      expect(ctx.allProjects).toEqual(['main-repo', 'main-repo/feature-x']);
+    });
+
+    it('subdirectory and worktree root share the same primary key', () => {
+      const atRoot = getProjectContext(worktreeCheckout).primary;
+      const inSubdir = getProjectContext(worktreeSubdir).primary;
+      expect(inSubdir).toBe(atRoot);
+      expect(inSubdir).not.toBe('feature-x');
+      expect(inSubdir).not.toBe('nested');
+    });
+  });
+});

@@ -1,0 +1,241 @@
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import {
+  addOpenCodePluginReference,
+  deregisterOpenCodePluginFromConfig,
+  getOpenCodeAgentsMdPath,
+  getOpenCodeConfigPath,
+  getInstalledSkillsPath,
+  installOpenCodeIntegration,
+  removeOpenCodePluginReference,
+  registerOpenCodePluginInConfig,
+} from '../../src/services/integrations/OpenCodeInstaller.js';
+
+describe('OpenCode installer config registration', () => {
+  let tempDir: string;
+  let previousConfigDir: string | undefined;
+  let previousClaudeConfigDir: string | undefined;
+  let previousInstallAllSkills: string | undefined;
+  let previousSkillSet: string | undefined;
+  let previousInstallExtraSkills: string | undefined;
+  let previousSmartTools: string | undefined;
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `opencode-installer-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tempDir, { recursive: true });
+    previousConfigDir = process.env.OPENCODE_CONFIG_DIR;
+    previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    previousInstallAllSkills = process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    previousSkillSet = process.env.CLAUDE_MEM_SKILL_SET;
+    previousInstallExtraSkills = process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    previousSmartTools = process.env.CLAUDE_MEM_SMART_TOOLS;
+    process.env.OPENCODE_CONFIG_DIR = tempDir;
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir, 'claude');
+    delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    delete process.env.CLAUDE_MEM_SKILL_SET;
+    delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    // These cases assert the DEFAULT skill set, which includes smart-explore.
+    // CLAUDE_MEM_SMART_TOOLS=false drops it (fork gate), and this machine sets
+    // that in ~/.claude/settings.json — Claude Code propagates it into the test
+    // env, so without this the default-set assertions fail locally and pass in
+    // CI. Same isolation as tests/integration/skill-selection.test.ts.
+    delete process.env.CLAUDE_MEM_SMART_TOOLS;
+  });
+
+  afterEach(() => {
+    if (previousConfigDir === undefined) {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = previousConfigDir;
+    }
+    if (previousClaudeConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    }
+    if (previousInstallAllSkills === undefined) {
+      delete process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS;
+    } else {
+      process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = previousInstallAllSkills;
+    }
+    if (previousSkillSet === undefined) {
+      delete process.env.CLAUDE_MEM_SKILL_SET;
+    } else {
+      process.env.CLAUDE_MEM_SKILL_SET = previousSkillSet;
+    }
+    if (previousSmartTools === undefined) {
+      delete process.env.CLAUDE_MEM_SMART_TOOLS;
+    } else {
+      process.env.CLAUDE_MEM_SMART_TOOLS = previousSmartTools;
+    }
+    if (previousInstallExtraSkills === undefined) {
+      delete process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS;
+    } else {
+      process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = previousInstallExtraSkills;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('adds claude-mem to an existing plugin array', () => {
+    const config = addOpenCodePluginReference({
+      plugin: ['context-mode'],
+      mcp: { context7: { enabled: true } },
+    });
+
+    expect(config.plugin).toEqual(['context-mode', './plugins/claude-mem.js']);
+    expect(config.mcp).toEqual({ context7: { enabled: true } });
+  });
+
+  it('does not duplicate an existing claude-mem plugin reference', () => {
+    const config = addOpenCodePluginReference({
+      plugin: ['context-mode', './plugins/claude-mem.js'],
+    });
+
+    expect(config.plugin).toEqual(['context-mode', './plugins/claude-mem.js']);
+  });
+
+  it('preserves an existing single-string plugin entry', () => {
+    const config = addOpenCodePluginReference({
+      plugin: 'context-mode',
+    });
+
+    expect(config.plugin).toEqual(['context-mode', './plugins/claude-mem.js']);
+  });
+
+  it('removes only claude-mem from plugin entries', () => {
+    const config = removeOpenCodePluginReference({
+      plugin: ['context-mode', './plugins/claude-mem.js'],
+      provider: { openai: { models: {} } },
+    });
+
+    expect(config.plugin).toEqual(['context-mode']);
+    expect(config.provider).toEqual({ openai: { models: {} } });
+  });
+
+  it('creates opencode.json when missing', () => {
+    const result = registerOpenCodePluginInConfig();
+
+    expect(result).toBe(0);
+    expect(existsSync(getOpenCodeConfigPath())).toBe(true);
+
+    const config = JSON.parse(readFileSync(getOpenCodeConfigPath(), 'utf-8'));
+    expect(config.$schema).toBe('https://opencode.ai/config.json');
+    expect(config.plugin).toEqual(['./plugins/claude-mem.js']);
+  });
+
+  it('preserves existing config fields when registering the plugin', () => {
+    writeFileSync(getOpenCodeConfigPath(), JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      plugin: ['context-mode'],
+      provider: { openai: { models: {} } },
+    }), 'utf-8');
+
+    const result = registerOpenCodePluginInConfig();
+
+    expect(result).toBe(0);
+    const config = JSON.parse(readFileSync(getOpenCodeConfigPath(), 'utf-8'));
+    expect(config.plugin).toEqual(['context-mode', './plugins/claude-mem.js']);
+    expect(config.provider).toEqual({ openai: { models: {} } });
+  });
+
+  it('removes the plugin reference from opencode.json during deregistration', () => {
+    writeFileSync(getOpenCodeConfigPath(), JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      plugin: ['context-mode', './plugins/claude-mem.js'],
+    }), 'utf-8');
+
+    const result = deregisterOpenCodePluginFromConfig();
+
+    expect(result).toBe(0);
+    const config = JSON.parse(readFileSync(getOpenCodeConfigPath(), 'utf-8'));
+    expect(config.plugin).toEqual(['context-mode']);
+  });
+
+  it('installs a neutral AGENTS.md primer instead of an opencode-project placeholder', async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requestedUrls.push(String(url));
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      const agentsContent = readFileSync(getOpenCodeAgentsMdPath(), 'utf-8');
+      expect(agentsContent).toContain('workspace project');
+      expect(agentsContent).toContain('claude-mem search');
+      expect(agentsContent).not.toContain('No context yet');
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'learn-codebase', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'smart-explore', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'pathfinder', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'standup', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'wowerpoint', 'SKILL.md'))).toBe(false);
+      expect(existsSync(join(getInstalledSkillsPath(), 'version-bump', 'SKILL.md'))).toBe(false);
+      expect(requestedUrls.some((url) => url.includes('project=opencode'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('installs every bundled skill when CLAUDE_MEM_INSTALL_ALL_SKILLS=true', async () => {
+    process.env.CLAUDE_MEM_INSTALL_ALL_SKILLS = 'true';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'wowerpoint', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'version-bump', 'SKILL.md'))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('installs compact skills plus configured extras', async () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babysit,weekly-digests';
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('worker unavailable');
+    }) as typeof fetch;
+
+    try {
+      const result = await installOpenCodeIntegration();
+
+      expect(result).toBe(0);
+      expect(existsSync(join(getInstalledSkillsPath(), 'knowledge-agent', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'mem-search', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'pathfinder', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'timeline-report', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'babysit', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'weekly-digests', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(getInstalledSkillsPath(), 'learn-codebase'))).toBe(false);
+      expect(existsSync(join(getInstalledSkillsPath(), 'standup'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps installed skills when an extra is invalid', async () => {
+    process.env.CLAUDE_MEM_SKILL_SET = 'compact';
+    process.env.CLAUDE_MEM_INSTALL_EXTRA_SKILLS = 'babisit';
+    const markerPath = join(getInstalledSkillsPath(), 'standup', 'preserve.txt');
+    mkdirSync(join(getInstalledSkillsPath(), 'standup'), { recursive: true });
+    writeFileSync(markerPath, 'preserve', 'utf-8');
+
+    const result = await installOpenCodeIntegration();
+
+    expect(result).toBe(1);
+    expect(readFileSync(markerPath, 'utf-8')).toBe('preserve');
+  });
+});
