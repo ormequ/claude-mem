@@ -133,8 +133,9 @@ Applying the test *would this prompt exist if the agent had behaved perfectly?*:
 >
 > **Ledger rows opened** for each of the three, with what must move and by when.
 >
-> **State audit.** ledger ✓ written · open loops ✓ written · series ✓ written · vocabulary ✓ written · signatures ✓
-> written · clusters ✓ written · cursor ✓ advanced · window ids ✓ saved.
+> **State audit.** ledger ✓ written 2.4K · open loops ✓ written 0.9K · series ✓ written 0.5K ·
+> vocabulary ✓ written 1.3K · cursor ✓ advanced 0.1K · evidence file ✓ written 3.1K ·
+> clusters ✓ written 0.7K (on probation).
 >
 > **Owner's verdict on the findings:** production profile — *did not know*; credentials helper —
 > *did not know*; connection settings — *knew*.
@@ -146,9 +147,10 @@ Applying the test *would this prompt exist if the agent had behaved perfectly?*:
 - `harness-review-vocab.md` — the three categories with one-sentence definitions, the fourth
   bucket, the subtraction rules, the severity anchors, `Version: v1`.
 - `harness-review-series.md` — one row: the window, the counts, the lane headlines.
-- `harness-review.json` — the cursor, in UTC.
-- `windows/<run-id>.txt` — the exact prompt ids this window covered, so the next run can check
-  the seam.
-- `harness-clusters.md` — the two clusters and what was decided about each.
+- `harness-review.json` — the cursor, in UTC, carrying the window's ceiling as `last_prompt_id`,
+  which is the whole record the next run needs to check the seam.
+- the local evidence file — the run's own numbers, kept out of the shipped skill.
+- `harness-clusters.md` — the two clusters and what was decided about each, plus the condition
+  under which the file itself goes.
 
 Next run scores those three predictions **before** looking at anything new.
