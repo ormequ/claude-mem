@@ -2,10 +2,8 @@
 >
 > ## The original project lives at **[thedotmack/claude-mem](https://github.com/thedotmack/claude-mem)** — go there for releases, issues and support.
 >
-> This repository is a personal fork with local fixes and different defaults. It is
-> **not** a GitHub fork any more (its history was rebuilt from a clean tree), so GitHub
-> shows no "forked from" label — hence this banner. Nothing here is upstream's
-> responsibility. What differs and why: [`FORK_NOTES.md`](FORK_NOTES.md).
+> This repository is a personal fork with local fixes and different defaults. Nothing
+> here is upstream's responsibility. What differs and why: [`FORK_NOTES.md`](FORK_NOTES.md).
 >
 > Last upstream version merged in: **v13.12.4** (`132b4634`).
 
