@@ -1,6 +1,6 @@
 ---
 name: harness-review
-version: 2.4.0
+version: 2.5.0
 description: Measures whether the harness is getting better, across several lanes - the user's corrective prompts, facts the agent keeps re-deriving, and errors it silently worked around. Use when asked for a harness retrospective, a correction-rate check, "is the harness getting better", "did that fix help", "what keeps going wrong", or a periodic review of how the agent has been failing the user.
 allowed-tools:
   - Bash
@@ -388,6 +388,16 @@ it usually does, because the person was in the middle of something else — the 
 evaporates. It leaves no trace anywhere else: no tool error, no re-derived fact, no correction,
 nothing for any other lane to find. A run that scores the ledger and never asks what the user
 proposed and nobody shipped is measuring only the fixes that happened to get attention.
+
+**Tag `harness-doubt` when the user questions a harness component itself.** Not *is this claim
+right* — that is the claim-challenge below, and its answer lives in the agent's reply. This one is
+*is this thing worth having*: does that skill do anything, why is this hook still here, is this
+rule earning its injection. They arrive one at a time, each individually minor, and each scores as
+the lowest severity there is. **Report rule: enumerate every tagged id and name the component each
+one is about; never fold them into a severity count.** On one measured run, eight prompts doubting
+a single component across two sessions were all counted at the lowest severity and none reached
+the report — the aggregate was the finding, and the severity column is what destroyed it. Carry
+the tag in the vocabulary file so the next run applies it without rediscovering it.
 
 **Sample the neutral bucket, every run, not only when building a baseline.** Everything labelled
 neutral is never read again, so a correction mislabelled neutral disappears permanently and
@@ -1039,6 +1049,13 @@ re-derived facts, worked-around errors, rule compliance, task outcomes — five.
 empty, or that does not exist yet reads exactly like a lane that ran clean, and the difference
 is the whole value of the report. "No outcome lane" is a result; silence is not.
 
+**Report what improved, held to the same evidence standard as everything else.** A report made
+only of failures describes a harness that has never once got better, and the owner cannot tell a
+period where the fixes held from a period where nobody checked. Three sources, all already
+computed by this run: ledger rows scored `verified`, error signatures whose span ended — a fix
+proving itself — and any count whose share fell against the previous series row. A line here
+carries its own number like every other line, or it is a mood.
+
 Every proposal must be **mechanical** — a hook, a prohibition, a config field, a settings
 entry, a schema change, an edit to a prompt file — and must **cite the specific evidence that
 produced it**, by row: prompt ids, observation ids, or log lines.
@@ -1079,9 +1096,9 @@ proposals have nothing, so they live in one report and the next run re-derives t
 and calls them new. Same file, same statuses, other direction: keep them beside the open loops
 and score them the same way.
 
-**Close the run with a state audit.** This file tells the run to write five state files —
-ledger, open loops, series, vocabulary, cursor — plus the local evidence file, and
-`harness-clusters.md` for as long as it is on probation. Print a table at the end: each file,
+**Close the run with a state audit.** A run leaves seven artefacts on disk: the **five mandated
+state files** — ledger, open loops, series, vocabulary, cursor — plus the local evidence file,
+plus `harness-clusters.md` for as long as it is on probation. Print a table at the end: each file,
 **its size**, whether it exists, and whether this run touched it. A run that reports numbers and
 wrote nothing has produced an impression, and the next run inherits nothing to compare against
 — which is the failure this whole file exists to prevent. The size column is what makes growth
@@ -1108,6 +1125,14 @@ structural rather than luck.
 
 If almost everything still comes back *knew*, the lanes are confirming rather than discovering,
 and the next run should change where it looks rather than how it counts.
+
+**Ask what worked, in the same breath.** *Knew / did not know / wrong* grades the findings and
+nothing else; it never asks what the harness stopped doing to the owner. One more question — what
+did you not have to say this period, what is working now that used to need repeating — recorded in
+the series file beside the verdicts. No query reaches this: relief is not an event, so a fix that
+succeeded leaves the store looking exactly like a period nobody worked on. The answer is also the
+only defence against removing something that is quietly holding, which is the one mistake this
+whole file's deletion bias can produce.
 
 **Have the citations checked by someone who did not write them.** The rule above — the citation
 must support the claim, not merely sit near it — is the one part of this contract with nothing

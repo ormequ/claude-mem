@@ -120,7 +120,12 @@ Applying the test *would this prompt exist if the agent had behaved perfectly?*:
 > series, not a comparison. Three of four subtraction rules computable.
 >
 > **Numbers.** 260 prompts, 29 corrections (11.2%), 31 traceback dumps (not corrections),
-> 12 excluded. Severity: S1 1, S2 4, S3 24.
+> 12 excluded. Severity: S1 1, S2 4, S3 24. `harness-doubt`: 3 tagged ids — #4901 and #4907 both
+> about the commit hook, #5002 about the search skill. Listed, not counted.
+>
+> **What improved.** Nothing to report and here is why: the ledger was established this run so no
+> row is due, and there is no previous series row to compare a share against. One candidate for
+> next run — the credentials signature, if proposal 2 ships and its span ends.
 >
 > **Proposals.**
 > 1. Deny the production profile in the runner config and default to local. *Cites: 6 prompts;
@@ -139,6 +144,10 @@ Applying the test *would this prompt exist if the agent had behaved perfectly?*:
 >
 > **Owner's verdict on the findings:** production profile — *did not know*; credentials helper —
 > *did not know*; connection settings — *knew*.
+>
+> **What the owner says is working:** the deploy check added last month — no longer mentioned in
+> any prompt this window, and he says he stopped thinking about it. Recorded in the series row so
+> a later run does not propose deleting it as a rule that never fires.
 
 ## What the run leaves behind
 
