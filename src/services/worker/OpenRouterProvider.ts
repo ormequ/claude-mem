@@ -7,8 +7,9 @@ import { logger } from '../../utils/logger.js';
 import type { ActiveSession, ConversationMessage } from '../worker-types.js';
 import { DatabaseManager } from './DatabaseManager.js';
 import { SessionManager } from './SessionManager.js';
-import { ClassifiedProviderError } from './provider-errors.js';
+import { ClassifiedProviderError, isClassified } from './provider-errors.js';
 import { withRetry, parseRetryAfterMs } from './retry.js';
+import { openRouterPacer } from './call-pacer.js';
 import { OpenAICompatibleProvider, type ProviderQueryResult } from './OpenAICompatibleProvider.js';
 
 /**
@@ -134,6 +135,11 @@ interface OpenRouterConfig {
   apiUrl: string;
   siteUrl?: string;
   appName?: string;
+  /** Pace calls worker-wide (all sessions share one budget). */
+  rateLimitingEnabled: boolean;
+  minRequestIntervalMs: number;
+  rateLimitBackoffMs: number;
+  maxRetries: number;
 }
 
 export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfig> {
@@ -187,7 +193,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
   }
 
   protected async query(history: ConversationMessage[], config: OpenRouterConfig): Promise<ProviderQueryResult> {
-    return this.queryOpenRouterMultiTurn(history, config.apiKey, config.model, config.apiUrl, config.siteUrl, config.appName);
+    return this.queryOpenRouterMultiTurn(history, config);
   }
 
   /** POST the chat-completions request. Extracted so the retry try block stays narrow. */
@@ -224,14 +230,37 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
     });
   }
 
+  /**
+   * Wait for this worker's next call slot, then run the attempt. A refusal
+   * holds every session off, not just the generator that got the 429 — the
+   * ceiling is per-account, and the storms that trip it are several sessions
+   * generating at once.
+   */
+  private async pacedAttempt<T>(
+    attempt: (attemptSignal: AbortSignal) => Promise<T>,
+    attemptSignal: AbortSignal,
+    config: OpenRouterConfig
+  ): Promise<T> {
+    if (!config.rateLimitingEnabled) {
+      return attempt(attemptSignal);
+    }
+
+    await openRouterPacer.acquire(config.minRequestIntervalMs);
+    try {
+      return await attempt(attemptSignal);
+    } catch (err: unknown) {
+      if (isClassified(err) && err.kind === 'rate_limit') {
+        openRouterPacer.defer(err.retryAfterMs ?? config.rateLimitBackoffMs);
+      }
+      throw err;
+    }
+  }
+
   private async queryOpenRouterMultiTurn(
     history: ConversationMessage[],
-    apiKey: string,
-    model: string,
-    apiUrl: string,
-    siteUrl?: string,
-    appName?: string
+    config: OpenRouterConfig
   ): Promise<ProviderQueryResult> {
+    const { apiKey, model, apiUrl, siteUrl, appName } = config;
     const messages = this.conversationToOpenAIMessages(history);
     const totalChars = history.reduce((sum, m) => sum + m.content.length, 0);
     const estimatedTokens = this.estimateTokens(history.map(m => m.content).join(''));
@@ -244,7 +273,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
 
     let priorRequestId: string | null = null;
 
-    const data = await withRetry<OpenRouterResponse>(async (attemptSignal) => {
+    const attempt = async (attemptSignal: AbortSignal): Promise<OpenRouterResponse> => {
       let response: Response;
       try {
         response = await this.fetchChatCompletion(apiUrl, apiKey, model, messages, siteUrl, appName, priorRequestId, attemptSignal);
@@ -284,7 +313,16 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
       }
 
       return responseData;
-    }, { label: `OpenRouter ${model}` });
+    };
+
+    const data = await withRetry<OpenRouterResponse>(
+      (attemptSignal) => this.pacedAttempt(attempt, attemptSignal, config),
+      {
+        label: `OpenRouter ${model}`,
+        maxRetries: config.maxRetries,
+        rateLimitDelayMs: config.rateLimitBackoffMs,
+      },
+    );
 
     if (!data.choices?.[0]?.message?.content) {
       logger.error('SDK', 'Empty response from OpenRouter');
@@ -354,7 +392,15 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
     const siteUrl = settings.CLAUDE_MEM_OPENROUTER_SITE_URL || '';
     const appName = settings.CLAUDE_MEM_OPENROUTER_APP_NAME || 'claude-mem';
 
-    return { apiKey, model, apiUrl, siteUrl, appName };
+    // Pacing + retry policy. Same shape as the Gemini rate-limiting switch:
+    // on unless explicitly disabled, since a gateway refusing this path costs
+    // a whole in-RAM batch. Non-numeric spellings fall back to the defaults.
+    const rateLimitingEnabled = settings.CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED !== 'false';
+    const minRequestIntervalMs = Number(settings.CLAUDE_MEM_OPENROUTER_MIN_REQUEST_INTERVAL_MS) || 1500;
+    const rateLimitBackoffMs = Number(settings.CLAUDE_MEM_OPENROUTER_RATE_LIMIT_BACKOFF_MS) || 75_000;
+    const maxRetries = Number(settings.CLAUDE_MEM_OPENROUTER_MAX_RETRIES) || 4;
+
+    return { apiKey, model, apiUrl, siteUrl, appName, rateLimitingEnabled, minRequestIntervalMs, rateLimitBackoffMs, maxRetries };
   }
 }
 

@@ -23,6 +23,10 @@ export interface SettingsDefaults {
   CLAUDE_MEM_OPENROUTER_BASE_URL: string;
   CLAUDE_MEM_OPENROUTER_SITE_URL: string;
   CLAUDE_MEM_OPENROUTER_APP_NAME: string;
+  CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED: string;   // Pace outbound calls; shared by all sessions
+  CLAUDE_MEM_OPENROUTER_MIN_REQUEST_INTERVAL_MS: string; // Worker-wide floor between calls when pacing is on
+  CLAUDE_MEM_OPENROUTER_RATE_LIMIT_BACKOFF_MS: string;   // Wait after a 429 that carries no Retry-After
+  CLAUDE_MEM_OPENROUTER_MAX_RETRIES: string;             // Retries per call (in addition to the first attempt)
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
   CLAUDE_MEM_PYTHON_VERSION: string;
@@ -118,6 +122,10 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_BASE_URL: '',  // #2382/#2590/#2622/#2393 — optional OpenAI-compatible base URL (e.g. https://api.deepseek.com, http://localhost:1234/v1). Empty = default OpenRouter endpoint.
     CLAUDE_MEM_OPENROUTER_SITE_URL: '',  // Optional: for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
+    CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED: 'true',      // ON by default: gateways in front of this path enforce a rolling request ceiling
+    CLAUDE_MEM_OPENROUTER_MIN_REQUEST_INTERVAL_MS: '1500',    // ~40 calls/min across every session — about what one generator sustains alone
+    CLAUDE_MEM_OPENROUTER_RATE_LIMIT_BACKOFF_MS: '75000',     // Measured recovery of a tripped ceiling is ~74s; shorter waits just re-trip it
+    CLAUDE_MEM_OPENROUTER_MAX_RETRIES: '4',                   // 4 x ~75s of patience — the batch is dropped when they run out
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',
     CLAUDE_MEM_PYTHON_VERSION: '3.13',

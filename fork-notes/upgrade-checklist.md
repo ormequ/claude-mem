@@ -16,6 +16,9 @@ After rebasing or merging upstream:
    A merge that reintroduces `platform_source` filtering on any read path fails
    these — that is the signal to re-drop it (inject/ObservationCompiler,
    SearchManager, SearchOrchestrator, DataRoutes) before shipping.
+   Also run the **rate-limit guard** (`bun test tests/openrouter-rate-limit.test.ts`).
+   A merge that reverts the `retry.ts` rate-limit branch fails it — see
+   "Rate limits on the OpenAI-compatible path" for what to re-apply.
 4. Run `claude plugin validate .`. Note a shell wrapper/alias around `claude`
    can swallow the subcommand ("Input must be provided … when using --print") —
    call the binary directly (`$(which -a claude | tail -1) plugin validate .`).

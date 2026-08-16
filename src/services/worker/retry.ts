@@ -6,7 +6,9 @@
  *
  * Used by GeminiProvider + OpenRouterProvider for fetch retries. Cap retries
  * at 2 because POSTs to these APIs aren't strictly idempotent; we honor a
- * provider-supplied request-id (best-effort) for dedup.
+ * provider-supplied request-id (best-effort) for dedup. The OpenRouter path
+ * overrides the cap and the rate-limit wait from settings — a rolling request
+ * ceiling outlives the default policy.
  */
 
 import { ClassifiedProviderError, isClassified } from './provider-errors.js';
@@ -39,18 +41,49 @@ export interface RetryOptions {
   baseDelayMs?: number;
   /** Cap for backoff delay. Default 30s. */
   maxDelayMs?: number;
+  /**
+   * Wait applied to `rate_limit` errors that carry no Retry-After. A rolling
+   * request ceiling clears on a wall-clock window, not on an exponential
+   * curve — from a 100ms base the retries expire long before the window does.
+   * Unset = old behavior (exponential backoff for rate limits too).
+   */
+  rateLimitDelayMs?: number;
   /** Tag for logging. */
   label?: string;
   /** External abort signal. */
   abortSignal?: AbortSignal;
+  /** Sleep between attempts. Injectable so tests need not wait out real delays. */
+  sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'label' | 'abortSignal'>> = {
+const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'label' | 'abortSignal' | 'rateLimitDelayMs' | 'sleepFn'>> = {
   maxRetries: 2,
   perAttemptTimeoutMs: 30_000,
   baseDelayMs: 100,
   maxDelayMs: 30_000,
 };
+
+/** Spread added to rate-limit waits so sibling callers don't retry in lockstep. */
+const RATE_LIMIT_JITTER_MS = 2_000;
+
+/** Default inter-attempt sleep: resolves early if the external signal aborts. */
+function abortAwareSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 /** Returns true if a classified error is worth retrying. */
 export function isRetryableKind(err: unknown): boolean {
@@ -104,13 +137,21 @@ export async function withRetry<T>(
         throw err;
       }
 
-      // Honor retryAfterMs from rate_limit errors; otherwise exponential backoff.
-      let delayMs: number;
-      if (isClassified(err) && err.kind === 'rate_limit' && err.retryAfterMs !== undefined) {
-        delayMs = err.retryAfterMs;
-      } else {
-        delayMs = computeBackoffMs(attempt, { baseDelayMs: opts.baseDelayMs, maxDelayMs: opts.maxDelayMs });
-      }
+      // Rate limits wait out a wall-clock window: Retry-After when the provider
+      // sends one, else the configured window. Everything else backs off
+      // exponentially. The cap admits the configured window (a caller must not
+      // set a window its own maxDelayMs silently clamps away) and stays absent
+      // for callers that configured none — there, Retry-After is honored
+      // verbatim, as before.
+      const rateLimitBase = isClassified(err) && err.kind === 'rate_limit'
+        ? err.retryAfterMs ?? options.rateLimitDelayMs
+        : undefined;
+      const rateLimitCap = options.rateLimitDelayMs !== undefined
+        ? Math.max(opts.maxDelayMs, options.rateLimitDelayMs)
+        : Number.POSITIVE_INFINITY;
+      const delayMs = rateLimitBase !== undefined
+        ? Math.min(rateLimitBase + Math.random() * RATE_LIMIT_JITTER_MS, rateLimitCap)
+        : computeBackoffMs(attempt, { baseDelayMs: opts.baseDelayMs, maxDelayMs: opts.maxDelayMs });
 
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.warn('SDK', `Retrying ${opts.label ?? 'fetch'} after ${delayMs}ms (attempt ${attempt + 1}/${opts.maxRetries})`, {
@@ -119,22 +160,7 @@ export async function withRetry<T>(
       });
       // Abort-aware sleep: an external abort during backoff should exit
       // immediately instead of waiting out the full delay.
-      await new Promise<void>((resolve, reject) => {
-        const signal = options.abortSignal;
-        if (signal?.aborted) {
-          reject(new Error('Aborted'));
-          return;
-        }
-        const timer = setTimeout(() => {
-          signal?.removeEventListener('abort', onAbort);
-          resolve();
-        }, delayMs);
-        const onAbort = () => {
-          clearTimeout(timer);
-          reject(new Error('Aborted'));
-        };
-        signal?.addEventListener('abort', onAbort, { once: true });
-      });
+      await (options.sleepFn ?? abortAwareSleep)(delayMs, options.abortSignal);
     } finally {
       clearTimeout(timeoutHandle);
       options.abortSignal?.removeEventListener('abort', onExternalAbort);
