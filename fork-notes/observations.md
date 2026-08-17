@@ -135,3 +135,13 @@ one fork-owned module. Rationale and measurements live in
   old 6-type guidance in its own language, and its LANGUAGE block would contradict the
   English rule. Switching `CLAUDE_MEM_MODE` to one of them is therefore a regression until
   they are re-translated. `code` is the default and the only one in use here.
+
+  **`code--chill` closed 2026-08-17.** It is a tone variant, not a translation, so it should
+  have kept the English rule — but it overrides `recording_focus` wholesale (deepMerge replaces
+  strings) and so dropped the LANGUAGE block with it. The block is now repeated in the variant,
+  and `tests/sdk/mode-language-rule.test.ts` asserts it for every non-translated mode that
+  resolves from `code`. The translated variants stay as described above: they do not override
+  `recording_focus` at all, so they currently inherit an English instruction that contradicts
+  their own placeholders — deliberate, since re-translating 29 files buys nothing while none of
+  them is in use. `law-study`, `meme-tokens` and `email-investigation` are separate base modes,
+  not `code` variants, and were left alone.
