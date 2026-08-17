@@ -98,3 +98,31 @@ describe('parseAgentXml concepts whitelist (mode with no vocabulary)', () => {
     if (res.valid) expect(res.observations[0].concepts).toEqual(['frontend', 'routing', 'gotcha']);
   });
 });
+
+// gpt-5.6-luna closes <concepts> with </concept> in 1-31% of its blocks
+// (measured over a replayed day, 2026-08-16). The container close used to be
+// mandatory, so every concept in such a block was silently lost.
+describe('malformed container close', () => {
+  it('keeps concepts when </concepts> is written as </concept>', () => {
+    const xml = `<observation><type>discovery</type><title>t</title>
+  <concepts>
+    <concept>gotcha</concept>
+    <concept>pattern</concept>
+  </concept>
+  <files_read><file>a.ts</file></files_read>
+</observation>`;
+    const parsed = parseAgentXml(xml);
+    expect(parsed.observations[0].concepts).toEqual(['gotcha', 'pattern']);
+    expect(parsed.observations[0].files_read).toEqual(['a.ts']);
+  });
+
+  it('does not spill a sibling list into an unterminated one', () => {
+    const xml = `<observation><type>discovery</type><title>t</title>
+  <files_read><file>a.ts</file>
+  <files_modified><file>b.ts</file></files_modified>
+</observation>`;
+    const parsed = parseAgentXml(xml);
+    expect(parsed.observations[0].files_read).toEqual(['a.ts']);
+    expect(parsed.observations[0].files_modified).toEqual(['b.ts']);
+  });
+});

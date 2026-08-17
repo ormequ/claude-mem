@@ -273,14 +273,22 @@ function extractField(content: string, fieldName: string): string | null {
 function extractArrayElements(content: string, arrayName: string, elementName: string): string[] {
   const elements: string[] = [];
 
-  const arrayRegex = new RegExp(`<${arrayName}>([\\s\\S]*?)</${arrayName}>`);
-  const arrayMatch = arrayRegex.exec(content);
-
-  if (!arrayMatch) {
+  const open = content.indexOf(`<${arrayName}>`);
+  if (open === -1) {
     return elements;
   }
 
-  const arrayContent = arrayMatch[1];
+  const bodyStart = open + arrayName.length + 2;
+  const rest = content.slice(bodyStart);
+
+  // Fork: some models close the container with the singular element name
+  // (`<concepts>` … `</concept>`), which used to drop every element in the block.
+  // The elements themselves are well-formed, so when the container close is
+  // missing, read up to the first tag that is neither the element nor its close.
+  const closeAt = rest.indexOf(`</${arrayName}>`);
+  const strayAt = new RegExp(`<(?!/?${elementName}>)[^>]*>`).exec(rest)?.index ?? -1;
+  const end = closeAt !== -1 ? closeAt : strayAt !== -1 ? strayAt : rest.length;
+  const arrayContent = rest.slice(0, end);
 
   const elementRegex = new RegExp(`<${elementName}>([\\s\\S]*?)</${elementName}>`, 'g');
   let elementMatch;
