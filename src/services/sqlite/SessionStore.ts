@@ -74,7 +74,21 @@ interface SdkSessionDetailRow {
 export class SessionStore {
   public db: Database;
 
-  constructor(dbPathOrDb: string | Database = DB_PATH) {
+  /**
+   * Whether queued mutation ops are kept. `sync_outbox` is drained by CloudSync
+   * alone, and CloudSync only exists when the hub is configured — on a
+   * local-only install the queue has no consumer and grows without bound
+   * (~170k rows / 47 MB in three weeks on this fork). Defaults to true so every
+   * caller that knows nothing about sync keeps the queue-everything behaviour;
+   * DatabaseManager passes the same predicate it uses to construct CloudSync.
+   */
+  private readonly syncOutboxEnabled: boolean;
+
+  constructor(
+    dbPathOrDb: string | Database = DB_PATH,
+    opts: { syncOutboxEnabled?: boolean } = {}
+  ) {
+    this.syncOutboxEnabled = opts.syncOutboxEnabled ?? true;
     if (dbPathOrDb instanceof Database) {
       this.db = dbPathOrDb;
     } else {
@@ -1932,6 +1946,10 @@ export class SessionStore {
       if (target?.origin_device_id === null) target.origin_device_id = 'self';
     }
     validateCanonicalMutation(candidate);
+    // Validate first, queue second: the shape check is what catches a malformed
+    // op at the write site, and it stays useful on a local-only install where
+    // the queue itself would never be read.
+    if (!this.syncOutboxEnabled) return;
     this.db.prepare(`
       INSERT INTO sync_outbox (op_uuid, rev, body, created_at_epoch)
       VALUES (?, ?, ?, ?)

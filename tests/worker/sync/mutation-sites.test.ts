@@ -178,6 +178,20 @@ describe('mutation sites', () => {
       for (const row of promptRows()) expect(row.sync_rev).toBe('2');
     });
 
+    it('queues nothing when the outbox is disabled, but still bumps the row lane', () => {
+      // Local-only install: CloudSync is never constructed, so nothing would
+      // ever drain the queue. The row-lane bookkeeping stays intact so enabling
+      // the hub later re-pushes from the rows themselves.
+      const localOnly = new SessionStore(db, { syncOutboxEnabled: false });
+      localOnly.updateMemorySessionId(1, 'mem-late');
+
+      expect(outboxRows(db).length).toBe(0);
+      for (const row of promptRows()) {
+        expect(row.sync_rev).toBe('2');
+        expect(row.synced_at).toBeNull();
+      }
+    });
+
     it('clearing the memory id emits nothing', () => {
       store.updateMemorySessionId(1, null);
       expect(outboxRows(db).length).toBe(0);

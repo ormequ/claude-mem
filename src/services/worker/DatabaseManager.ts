@@ -22,10 +22,18 @@ export class DatabaseManager {
 
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
 
+    // Cloud sync is active iff token, user id, and Hub URL are all non-empty.
+    // Nothing else reads sync_outbox, so this same predicate decides whether
+    // mutation ops are worth queueing at all.
+    const cloudSyncConfigured =
+      settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' &&
+      settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '' &&
+      settings.CLAUDE_MEM_CLOUD_SYNC_HUB_URL.trim() !== '';
+
     // The launch schema is SyncHub-native. SessionStore marks any pre-launch
     // local corpus as a nonqueued baseline once; only subsequent writes enter
     // the canonical v2 outbox.
-    this.sessionStore = new SessionStore(this.db);
+    this.sessionStore = new SessionStore(this.db, { syncOutboxEnabled: cloudSyncConfigured });
     this.sessionSearch = new SessionSearch(this.db);
 
     const chromaEnabled = settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
@@ -35,14 +43,9 @@ export class DatabaseManager {
       logger.info('DB', 'Chroma disabled via CLAUDE_MEM_CHROMA_ENABLED=false, using SQLite-only search');
     }
 
-    // Cloud sync is active iff token, user id, and Hub URL are all non-empty.
     // Inactive installs get null so the write-site `getCloudSync()?.notify()`
     // nudges are free no-ops.
-    if (
-      settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' &&
-      settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '' &&
-      settings.CLAUDE_MEM_CLOUD_SYNC_HUB_URL.trim() !== ''
-    ) {
+    if (cloudSyncConfigured) {
       this.cloudSync = new CloudSync(this.db, settings);
     }
 
