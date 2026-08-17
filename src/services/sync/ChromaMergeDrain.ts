@@ -56,9 +56,17 @@ export async function drainChromaMergeQueue(
   for (const { table, docType } of TARGETS) {
     if (!hasFlagColumn(db, table)) continue;
 
+    // A row whose pointer equals its own project has nothing to patch: the
+    // Chroma metadata already carries that project. Adoption produces those
+    // self-pointers whenever a child worktree resolves to the same project name
+    // as its parent (an umbrella checkout), and without this predicate every one
+    // of them is re-queued on every tick — tens of thousands of no-op patches
+    // competing for the single Chroma writer. Filtering here, not only at the
+    // producers, also covers self-pointers already stored by older versions.
     const rows = db.prepare(
       `SELECT id, merged_into_project AS project FROM ${table}
         WHERE merged_into_project IS NOT NULL AND chroma_merge_synced_at IS NULL
+          AND merged_into_project <> project
         ORDER BY id`
     ).all() as Array<{ id: number; project: string }>;
     if (rows.length === 0) continue;

@@ -275,6 +275,13 @@ export async function adoptMergedWorktrees(opts: {
 
     const adoptWorktreeInTransaction = (wt: WorktreeEntry) => {
       const worktreeProject = getProjectContext(wt.path).primary;
+      // An umbrella checkout resolves its child worktrees to the parent's own
+      // project name. Pointing those rows at the parent writes merged_into_project
+      // = project — a self-pointer that changes no read result and queues the row
+      // for a Chroma patch that changes no metadata either.
+      if (worktreeProject === parentProject) {
+        return;
+      }
       let obsChanges: number;
       let sumChanges: number;
       if (syncLane) {

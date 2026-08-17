@@ -311,6 +311,13 @@ export function adoptOrphan(
   parentProject: string,
   opts: { dataDirectory?: string } = {}
 ): { observations: number; summaries: number } {
+  // Adopting a project into itself would set merged_into_project = project: a
+  // self-pointer that no read path distinguishes from NULL, but that the
+  // ChromaMergeDrain would keep re-queueing. See ChromaMergeDrain.ts.
+  if (project === parentProject) {
+    return { observations: 0, summaries: 0 };
+  }
+
   const dataDirectory = opts.dataDirectory ?? paths.dataDir();
   const dbPath = path.join(dataDirectory, 'claude-mem.db');
   const db = openConfiguredSqliteDatabase(dbPath);

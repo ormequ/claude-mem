@@ -116,4 +116,72 @@ describe('worktree adoption Chroma hydration', () => {
     expect(result.chromaQueued).toBe(1);
     expect(chromaCalls).toEqual([]);
   });
+
+  it('does not point a worktree at itself when the project root override collapses both names', async () => {
+    // CLAUDE_MEM_PROJECT_ROOT makes every checkout of an umbrella report the same
+    // project name, so worktree and parent resolve identically. Adopting then
+    // writes merged_into_project = project: invisible to reads, but it queues the
+    // row for a Chroma patch that changes nothing, forever.
+    tempRoot = mkdtempSync(path.join(tmpdir(), 'claude-mem-self-'));
+    const mainRepo = path.join(tempRoot, 'parent-repo');
+    mainRepoForCleanup = mainRepo;
+    const worktree = path.join(tempRoot, 'summary-worktree');
+    const dataDirectory = path.join(tempRoot, 'data');
+    mkdirSync(mainRepo, { recursive: true });
+    mkdirSync(dataDirectory);
+
+    git(mainRepo, 'init', '-b', 'main');
+    git(mainRepo, 'config', 'user.email', 'test@example.com');
+    git(mainRepo, 'config', 'user.name', 'Test');
+    writeFileSync(path.join(mainRepo, 'README.md'), 'base\n');
+    git(mainRepo, 'add', 'README.md');
+    git(mainRepo, 'commit', '-m', 'base');
+    git(mainRepo, 'worktree', 'add', '-b', 'feature', worktree);
+
+    const dbPath = path.join(dataDirectory, 'claude-mem.db');
+    const store = new SessionStore(dbPath);
+    const sdkSessionId = store.createSDKSession('content-self', 'parent-repo', 'prompt');
+    store.ensureMemorySessionIdRegistered(sdkSessionId, 'self-session');
+    const summary = store.importSessionSummary({
+      memory_session_id: 'self-session',
+      project: 'parent-repo',
+      request: 'umbrella work',
+      investigated: null,
+      learned: null,
+      completed: null,
+      next_steps: null,
+      files_read: null,
+      files_edited: null,
+      notes: null,
+      prompt_number: 1,
+      discovery_tokens: 0,
+      created_at: new Date(1_700_000_000_000).toISOString(),
+      created_at_epoch: 1_700_000_000_000,
+    });
+    store.close();
+
+    const previousRoot = process.env.CLAUDE_MEM_PROJECT_ROOT;
+    process.env.CLAUDE_MEM_PROJECT_ROOT = mainRepo;
+    let result;
+    try {
+      result = await adoptMergedWorktrees({
+        repoPath: mainRepo,
+        dataDirectory,
+        onlyBranch: 'feature'
+      });
+    } finally {
+      if (previousRoot === undefined) delete process.env.CLAUDE_MEM_PROJECT_ROOT;
+      else process.env.CLAUDE_MEM_PROJECT_ROOT = previousRoot;
+    }
+
+    const verify = new SessionStore(dbPath);
+    const row = verify.db.prepare(
+      'SELECT merged_into_project FROM session_summaries WHERE id = ?'
+    ).get(summary.id) as { merged_into_project: string | null };
+    verify.close();
+
+    expect(row.merged_into_project).toBeNull();
+    expect(result.adoptedSummaries).toBe(0);
+    expect(result.chromaQueued).toBe(0);
+  });
 });

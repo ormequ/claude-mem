@@ -145,6 +145,24 @@ describe('drainChromaMergeQueue', () => {
     expect(chroma.calls.length).toBe(0);
   });
 
+  it('skips self-pointers while still patching real merges in the same run', async () => {
+    // An umbrella checkout adopts its child worktrees into its own project name,
+    // leaving merged_into_project = project. Those rows carry the right Chroma
+    // metadata already; re-queueing them on every tick starves the real work.
+    const self1 = insertObs(db, 'self1', { merged: 'wt-proj' });
+    const self2 = insertSummary(db, { merged: 'wt-proj' });
+    const real = insertObs(db, 'real', { merged: 'acme-app' });
+
+    const chroma = fakeChromaSync();
+    const result = await drainChromaMergeQueue(db, chroma as any);
+
+    expect(result.patched).toBe(1);
+    expect(chroma.calls.flatMap(c => c.ids)).toEqual([real]);
+    expect(flagOf(db, 'observations', self1)).toBeNull();
+    expect(flagOf(db, 'session_summaries', self2)).toBeNull();
+    expect(flagOf(db, 'observations', real)).not.toBeNull();
+  });
+
   it('backfills pre-existing merged rows whose flag defaulted to NULL', async () => {
     // Simulates history: rows merged by the old code path, flag column added by
     // migration as NULL — the drain must pick them up.

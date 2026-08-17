@@ -417,6 +417,26 @@ describe('adoptOrphan', () => {
     expect(sums.n).toBe(2);
   });
 
+  it('refuses to adopt a project into itself', () => {
+    // An umbrella checkout resolves parent and child to the same project name.
+    // Writing merged_into_project = project changes no read result and queues
+    // every row for a Chroma patch that changes no metadata.
+    const dataDir = makeDataDir([]);
+    addRows(dataDir, 'demo', 3, 2);
+
+    const changed = adoptOrphan('demo', 'demo', { dataDirectory: dataDir });
+
+    expect(changed).toEqual({ observations: 0, summaries: 0 });
+
+    const check = new Database(path.join(dataDir, 'claude-mem.db'));
+    const pointed = check.prepare(
+      'SELECT COUNT(*) n FROM observations WHERE merged_into_project IS NOT NULL'
+    ).get() as { n: number };
+    check.close();
+
+    expect(pointed.n).toBe(0);
+  });
+
   it('is idempotent — a second run changes nothing', () => {
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'demo/gone', 4, 1);
