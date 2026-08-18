@@ -316,8 +316,27 @@ whole day, and a run on such a day leaves nothing behind. Hence the rule both ha
 **every surviving line carries its own number inline; a pointer to the store is a convenience,
 never the mechanism.** A `runs/` or `archive/` directory was proposed and rejected.
 
-**On the first run the cursor does not exist.** Start the window wherever your own baseline
-recount ended and read forward.
+**On the first run the cursor does not exist, and a first run covers the whole store.** Start
+the prompt window wherever your own baseline recount ended and read forward — but the prompts
+are not the store. Everything before that window is history no lane has ever classified, and a
+first run that leaves it unread hands the next run a backlog nobody recorded.
+
+Read that history through `session_summaries`, not through prompts. One summary row is a
+compact record of a session — what was asked, what was investigated, what was learned, what was
+completed, what came next — and it exists for sessions that produced no spec, no branch and no
+artefact, which is exactly the work a prompt window misses. Full text for every historical
+prompt is what is unaffordable; the summaries are not. Slice them and fan out: the
+`weekly-digests` skill in this same plugin already implements the shape — split the timeline
+into per-period slices, one subagent per slice, each handed the previous slice's carry-forward.
+**Take that mechanism; do not take its output.** A period-by-period narrative is the deliverable
+this file exists to argue against — the carry-forward here holds open findings and counts, not
+continuity of story.
+
+**Any boundary carries its reason in the cursor, written by the run that set it.** Not a note
+added afterwards, and never a reason reconstructed later from the choice itself: an
+after-the-fact justification cannot be told apart from a rationalisation, by the next run or by
+anyone. If a run cannot cover something, the cursor records what was left out and why, as
+numbers the next run can act on rather than a sentence it has to trust.
 
 **Search truncates the prompt. Fetch the full text before classifying:**
 
@@ -755,6 +774,22 @@ Sub-threshold clusters worth watching go in the same file. Otherwise a fact sitt
 sessions is invisible until it silently becomes news, and the growth — the thing worth
 reacting to — is never seen.
 
+**A cluster needs a way to stop being reported, or this lane only ever grows.** Lanes B and C
+are cumulative and each cluster's span is declared to be the finding, so nothing ever leaves:
+a failure that stopped months ago prints in every run carrying its old span, indistinguishable
+from one that happened yesterday. Mirror the rule the ledger already has for `verified` rows —
+**a cluster whose newest occurrence predates the last two runs collapses to a single line**
+carrying its span, its last date and its count. Collapsed, not deleted: deleting loses the
+evidence that it was ever real, and the report needs to be able to say "this stopped" as much
+as it needs to say "this recurs". Two guards, because both failure modes are easy to hit:
+
+- **Collapse on recurrence, never on a fix being shipped.** A cluster nobody worked on that
+  simply stopped is still a collapse. A cluster with a shipped fix that keeps recurring is not
+  — that one is the ledger's problem, and collapsing it hides a fix that did not work.
+- **A return reopens it at full size, and the reopening is itself a finding.** A failure class
+  that comes back after two quiet runs says the fix addressed a symptom, and that is worth more
+  than the cluster's own row count.
+
 **This file is on probation, and the condition belongs inside it.** Exact-title matching is too
 crude to cluster the same discovery worded two ways, and a measured run returned no stable
 cluster at all — everything above threshold was session-bootstrap and build-outcome noise. Write
@@ -968,6 +1003,40 @@ found" while everything burned. In that mode the load-bearing signal is the task
 prompts demote to a drift detector: if successive briefs grow new constraints, the defect is
 alive and is being absorbed by the brief instead of being fixed.
 
+### The registry check — beside Lane E, and not Lane E
+
+**Leave the stub above exactly as it stands.** This is a separate, much smaller check, and it
+does not turn into the outcome lane however much it grows. Lane E asks how a task ended —
+accepted, sent back, redone, abandoned. This asks one mechanical question: **does a `DONE`
+marker mean the work reached the default branch.** Labelling it Lane E would let the next run
+read "the outcome lane exists" and stop looking for the real one, which is the favourable
+silence this file exists to prevent. Keep the five-lane enumeration in the output contract as
+it is; this check reports on its own line.
+
+**Run it where the pipeline keeps durable progress files** — a spec or run directory whose files
+declare a status per task, and gate logs carrying a pass/fail verdict. Both are greppable and
+both can be checked against git, which is what separates this from asking the store how work
+ended. If no such directory exists, say so and stop; do not reconstruct task outcomes from
+observations.
+
+**Print the size of the sliver, every time.** A registry covers the work that went through the
+pipeline, which is a fraction of the work the store holds — and a silent result here reads as
+"tasks ended fine", the same favourable silence. State how many tasks the registry carries
+against how many the store does, in the same line as any finding.
+
+**The obvious verifier is wrong where the default branch is squash-merged.** Checking whether a
+recorded commit is an ancestor of the default branch returns *not an ancestor* for every task
+that landed, because the squash rewrites the commit — a mechanical check that can report a
+total failure rate on work that all shipped. Verify through the merge reference instead: the PR
+or merge identifier in the squash subject. Before trusting either result, confirm the branch's
+merge policy; the check is only as good as that assumption.
+
+**Where the registry does not record where a task landed, say so in three numbers, never a
+verdict**: tasks marked done, tasks verifiable, tasks unverifiable for want of a merge
+reference. That gap is itself the check's first real finding — a registry that cannot verify
+itself needs one line added to its template at merge time, which is a mechanical proposal like
+any other.
+
 ### Making the lanes agree
 
 The prompt lane's number is only as good as another lane's confirmation, and "confirmation" has
@@ -992,6 +1061,97 @@ merely occurred near one.
 The first case is not hypothetical: a permission-denial signature has been measured recurring
 for months across many sessions with no prompt ever complaining about it — while the correction
 rate over the same period looked fine.
+
+## A sweep is one pass of two, and the first pass produces candidates
+
+Whenever a lane is worked by fanning agents across slices of history, **what comes back is a
+lead list, not a result**. First-pass findings are wrong often enough that reporting them as
+findings means reporting a set whose headlines have not been checked — and the ones that do
+survive are usually *restated* rather than confirmed, so even "confirmed" rarely means "as
+written". Send each finding back for a dig against the primary evidence before it reaches the
+report. The dig is cheap enough to be mandatory because the evidence is already on disk: one
+agent per finding, settled in minutes.
+
+**Budget the dig by strength, not by coverage.** One agent per finding, digging the strongest
+finding of each slice, beats confirming many weak ones — a withdrawal is not wasted work when
+what replaces it is better, and in practice the replacement is the smaller, harder, more useful
+claim.
+
+**What the second pass is for is replacement, not confirmation.** The pattern to expect: a
+sweeping headline dies and a narrower mechanism takes its place. "Many sessions hunting for a
+module" becomes a statement about what a dispatched agent has to re-pay for. "Merging on red
+became routine" becomes a statement about a gate whose failures carry no information. Write the
+replacement, not the headline it replaced.
+
+### Every count states which of three levels it is on
+
+A `session_summaries` row is one summarisation checkpoint, roughly one per prompt.
+`memory_session_id` groups checkpoints but is **not** a conversation — one conversation is
+chopped across several groups. The conversation key is the uuid embedded in the
+`memory_session_id` string. Rows overstate conversations heavily, and by a factor that belongs
+to the store being read — compute it, never assume it. A count that does not name its level is
+not a count: state the level in the finding, rows or groups or conversations.
+
+**`sdk_sessions` is not the way to resolve this.** It holds one row per conversation while
+`session_summaries` holds many groups per conversation, so a join through it silently drops
+most of the history — and a group under investigation may have no `sdk_sessions` row at all.
+Derive the conversation from the id string instead.
+
+Most first-pass withdrawals trace to this one confusion. "N consecutive sessions doing X" is the
+shape it takes, and it dissolves on inspection into one dispatched agent writing many
+checkpoints in seconds, or one conversation lasting half an hour.
+
+### The summariser has four systematic failure modes; discount for them by name
+
+- **It narrates its own duplicates as repetition.** Re-emitting a still-pending closing line at
+  each checkpoint produces rows that say "asked for the third time", "for the fourth time". The
+  store manufactured the stall it is now reporting.
+- **`next_steps` renders "gave a recommendation and offered to proceed" as "awaiting user
+  decision".** Every parked, blocked or awaiting-approval claim is inflated by this. Re-read the
+  rows before counting them, and measure the inflation on your own store if you intend to
+  report the count.
+- **`type` is unreliable inside a burst.** Rows written in quick succession inherit one type,
+  including rows whose subject plainly is not that type. Do not build a count on `type` alone.
+- **A claim about the store's own behaviour is a hypothesis, not evidence.** It is a generator's
+  conclusion about the thing that wrote it. Re-check it against the store before citing it —
+  schema, counts and queries are cheap to re-run.
+
+### git is the reliable second source; transcripts frequently are not
+
+A claim about code is settled by the tree as it stood on the date in question — `git log -S`,
+`git show`, `git branch --contains`, `git ls-tree` — not by prose about it. Session transcripts
+are not a dependable second source: they may be absent for exactly the period a dig needs, and
+they carry no retention guarantee. **Write "no transcript survives for this period" as a loud
+line; never read its absence as absence of errors.** Where the pipeline writes durable artefacts
+— gate logs, progress files — prefer those over any summary of them.
+
+## What the run costs — price it in tokens, and never in money
+
+**The source needs no instrumentation.** Every dispatched agent writes its own transcript under
+`~/.claude/projects/<project>/<session-id>/subagents/agent-<name>-<id>.jsonl`, one file per
+agent, and every assistant line carries a `usage` object. Summing usage per file gives a
+per-agent cost after the fact, for any run whose transcripts survive.
+
+**Report `output_tokens` alone, and name the field in the series row.** Cache reads and cache
+writes dwarf output by orders of magnitude; summing them makes every run look catastrophic and
+mostly measures how much context was re-sent, which tracks conversation length rather than work
+done. Output tokens track what the agent produced. Name the field, or the next run picks a
+different one and the series stops being a series.
+
+**No dollar figure exists anywhere in the harness.** The transcripts carry no cost field, and a
+rate invented here would be a number with no source that later reads as measured. Prices change
+and would break comparability across a series; token counts do not.
+
+**Four numbers in the series row:** agents dispatched, output tokens, findings that survived the
+dig, and the derived cost per surviving finding.
+
+**One caveat travels with the number:** the lead session's own tokens are not in the subagent
+files. For a whole-review figure, add the parent transcript; for comparing fan-out designs, the
+subagent files alone are the honest unit.
+
+**The cost number only bites when paired with the withdrawal rate.** A run that halves
+withdrawals while doubling the cost per surviving finding has not improved, and without both in
+the same row nobody can tell which happened.
 
 ## Baseline — build your own, recompute once, then freeze
 
