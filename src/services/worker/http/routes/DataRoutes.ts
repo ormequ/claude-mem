@@ -15,6 +15,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import { getObservationsByFilePath } from '../../../sqlite/observations/get.js';
+import { bumpRelevanceCount } from '../../../sqlite/observations/relevance.js';
 import { getFirstObservationCreatedAt } from '../../../sqlite/observations/recent.js';
 import { getUptimeSeconds } from '../../../../shared/uptime.js';
 import { assertCanonicalDecimal, type ContentKind } from '../../../sync/CanonicalContent.js';
@@ -185,6 +186,12 @@ export class DataRoutes extends BaseRouteHandler {
 
     const store = this.dbManager.getSessionStore();
     const observations = store.getObservationsByIds(ids, { orderBy, limit, project });
+
+    // One of the two events that count as a retrieval — see
+    // src/services/sqlite/observations/relevance.ts for what the counter means
+    // and why the bump lives here rather than in getObservationsByIds (the
+    // semantic-search listing path calls that same method).
+    bumpRelevanceCount(store.db, observations.map(o => o.id));
 
     res.json(observations);
   });

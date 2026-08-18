@@ -1711,6 +1711,12 @@ export class SessionStore {
       this.db.run('ALTER TABLE observations ADD COLUMN generated_by_model TEXT');
     }
     if (!hasRelevanceCount) {
+      // relevance_count = how many times this observation was read back out of
+      // the store and put in front of a model. Incremented by exactly two
+      // events (get_observations, session-start injection) and by nothing at
+      // query time; see src/services/sqlite/observations/relevance.ts for the
+      // full contract. It shipped here as a bare column with no writer, which
+      // is how it sat dead at 0 for every row.
       this.db.run('ALTER TABLE observations ADD COLUMN relevance_count INTEGER DEFAULT 0');
     }
 

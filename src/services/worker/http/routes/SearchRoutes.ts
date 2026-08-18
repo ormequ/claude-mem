@@ -10,6 +10,7 @@ import { validateBody } from '../middleware/validateBody.js';
 import { logger } from '../../../../utils/logger.js';
 import { groupByDate } from '../../../../shared/timeline-formatting.js';
 import { countObservationsByProjects } from '../../../context/ObservationCompiler.js';
+import { bumpRelevanceCount } from '../../../sqlite/observations/relevance.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import type { ObservationSearchResult, SessionSummarySearchResult } from '../../../sqlite/types.js';
@@ -375,6 +376,13 @@ export class SearchRoutes extends BaseRouteHandler {
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(contextResult.text);
+
+    // Count the rows this session actually started with — one of the two
+    // retrieval events (src/services/sqlite/observations/relevance.ts). Done
+    // AFTER the response and on the worker's own writable connection: the
+    // renderer holds a read-only one on purpose, and a SessionStart hook must
+    // never wait on a write lock for its context.
+    bumpRelevanceCount(this.searchManager.getSessionStore().db, contextResult.injectedObservationIds);
   });
 
   private handleSemanticContext = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
