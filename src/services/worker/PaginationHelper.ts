@@ -186,8 +186,11 @@ export class PaginationHelper {
     const conditions: string[] = [];
 
     if (project) {
-      conditions.push('s.project = ?');
-      params.push(project);
+      // Same adoption pointer the summaries branch above honors: prompts live
+      // under their session's project, so an adopted worktree's prompts belong
+      // to the parent scope.
+      conditions.push('(s.project = ? OR s.merged_into_project = ?)');
+      params.push(project, project);
     } else {
       conditions.push('s.project != ?');
       params.push(OBSERVER_SESSIONS_PROJECT);

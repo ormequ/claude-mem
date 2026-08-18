@@ -19,6 +19,11 @@ export interface AdoptionResult {
   adoptedObservations: number;
   adoptedSummaries: number;
   /**
+   * sdk_sessions rows repointed at the parent. Prompts carry no project of
+   * their own, so this is what moves them with their observations.
+   */
+  adoptedSessions: number;
+  /**
    * Rows flagged (chroma_merge_synced_at = NULL) for the worker's
    * ChromaMergeDrain to patch. Adoption no longer writes to Chroma directly —
    * the CLI adopt process can't take the single-writer lock the worker holds.
@@ -172,6 +177,7 @@ export async function adoptMergedWorktrees(opts: {
     mergedBranches: [],
     adoptedObservations: 0,
     adoptedSummaries: 0,
+    adoptedSessions: 0,
     chromaQueued: 0,
     dryRun,
     errors: []
@@ -227,6 +233,9 @@ export async function adoptMergedWorktrees(opts: {
     const sumColumns = db
       .prepare('PRAGMA table_info(session_summaries)')
       .all() as ColumnInfo[];
+    const sessColumns = db
+      .prepare('PRAGMA table_info(sdk_sessions)')
+      .all() as ColumnInfo[];
     const obsHasColumn = obsColumns.some(c => c.name === 'merged_into_project');
     const sumHasColumn = sumColumns.some(c => c.name === 'merged_into_project');
     if (!obsHasColumn || !sumHasColumn) {
@@ -256,6 +265,14 @@ export async function adoptMergedWorktrees(opts: {
         ? 'UPDATE session_summaries SET merged_into_project = ?, chroma_merge_synced_at = NULL WHERE project = ? AND merged_into_project IS NULL'
         : 'UPDATE session_summaries SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL'
     );
+    // Prompts have no project column — they resolve through their session. The
+    // pointer therefore has to move on sdk_sessions too, on BOTH lanes:
+    // sdk_sessions carries no sync_rev/synced_at, so it stays out of the sync
+    // outbox and each device sets it from its own adoption pass.
+    const sessHasColumn = sessColumns.some(c => c.name === 'merged_into_project');
+    const updateSess = sessHasColumn
+      ? db.prepare('UPDATE sdk_sessions SET merged_into_project = ? WHERE project = ? AND merged_into_project IS NULL')
+      : null;
     // Used only on the sync-lane path below, where the remap is emitted through
     // the outbox instead of these UPDATEs.
     const clearObsChromaFlag = obsHasFlag
@@ -284,6 +301,7 @@ export async function adoptMergedWorktrees(opts: {
       }
       let obsChanges: number;
       let sumChanges: number;
+      result.adoptedSessions += updateSess?.run(parentProject, worktreeProject).changes ?? 0;
       if (syncLane) {
         const remap = emitRemapProject(
           db!,

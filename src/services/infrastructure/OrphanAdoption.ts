@@ -310,12 +310,12 @@ export function adoptOrphan(
   project: string,
   parentProject: string,
   opts: { dataDirectory?: string } = {}
-): { observations: number; summaries: number } {
+): { observations: number; summaries: number; sessions: number } {
   // Adopting a project into itself would set merged_into_project = project: a
   // self-pointer that no read path distinguishes from NULL, but that the
   // ChromaMergeDrain would keep re-queueing. See ChromaMergeDrain.ts.
   if (project === parentProject) {
-    return { observations: 0, summaries: 0 };
+    return { observations: 0, summaries: 0, sessions: 0 };
   }
 
   const dataDirectory = opts.dataDirectory ?? paths.dataDir();
@@ -336,6 +336,12 @@ export function adoptOrphan(
 
     let observations = 0;
     let summaries = 0;
+    let sessions = 0;
+    // sdk_sessions is the only project label prompts have (they resolve
+    // through their session), so it moves with the other two — see
+    // WorktreeAdoption. Guarded because this column arrived after the DB may
+    // have been created.
+    const sessionsMigrated = hasColumn(db, 'sdk_sessions', 'merged_into_project');
     const tx = db.transaction(() => {
       observations = db.prepare(
         `UPDATE observations SET merged_into_project = ?, chroma_merge_synced_at = NULL
@@ -345,13 +351,19 @@ export function adoptOrphan(
         `UPDATE session_summaries SET merged_into_project = ?, chroma_merge_synced_at = NULL
          WHERE project = ? AND merged_into_project IS NULL`
       ).run(parentProject, project).changes;
+      if (sessionsMigrated) {
+        sessions = db.prepare(
+          `UPDATE sdk_sessions SET merged_into_project = ?
+           WHERE project = ? AND merged_into_project IS NULL`
+        ).run(parentProject, project).changes;
+      }
     });
     tx();
 
     logger.debug('SYSTEM', 'Adopted orphaned worktree project', {
-      project, parentProject, observations, summaries,
+      project, parentProject, observations, summaries, sessions,
     });
-    return { observations, summaries };
+    return { observations, summaries, sessions };
   } finally {
     db.close();
   }

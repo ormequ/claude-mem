@@ -402,7 +402,7 @@ describe('adoptOrphan', () => {
 
     const changed = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
 
-    expect(changed).toEqual({ observations: 3, summaries: 2 });
+    expect(changed).toEqual({ observations: 3, summaries: 2, sessions: 0 });
 
     const check = new Database(path.join(dataDir, 'claude-mem.db'));
     const obs = check.prepare(
@@ -426,7 +426,7 @@ describe('adoptOrphan', () => {
 
     const changed = adoptOrphan('demo', 'demo', { dataDirectory: dataDir });
 
-    expect(changed).toEqual({ observations: 0, summaries: 0 });
+    expect(changed).toEqual({ observations: 0, summaries: 0, sessions: 0 });
 
     const check = new Database(path.join(dataDir, 'claude-mem.db'));
     const pointed = check.prepare(
@@ -444,7 +444,7 @@ describe('adoptOrphan', () => {
     adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
     const second = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
 
-    expect(second).toEqual({ observations: 0, summaries: 0 });
+    expect(second).toEqual({ observations: 0, summaries: 0, sessions: 0 });
   });
 
   it('leaves other projects untouched', () => {
@@ -477,7 +477,7 @@ describe('adoptOrphan', () => {
 
     const changed = adoptOrphan('demo/gone', 'demo', { dataDirectory: dataDir });
 
-    expect(changed).toEqual({ observations: 0, summaries: 0 });
+    expect(changed).toEqual({ observations: 0, summaries: 0, sessions: 0 });
 
     const check = new Database(path.join(dataDir, 'claude-mem.db'));
     const obs = check.prepare(

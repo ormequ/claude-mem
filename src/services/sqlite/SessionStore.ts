@@ -954,7 +954,8 @@ export class SessionStore {
         started_at_epoch INTEGER NOT NULL,
         completed_at TEXT,
         completed_at_epoch INTEGER,
-        status TEXT CHECK(status IN ('active', 'completed', 'failed')) NOT NULL DEFAULT 'active'
+        status TEXT CHECK(status IN ('active', 'completed', 'failed')) NOT NULL DEFAULT 'active',
+        merged_into_project TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_sdk_sessions_claude_id ON sdk_sessions(content_session_id);
@@ -1744,6 +1745,35 @@ export class SessionStore {
       this.db.run('ALTER TABLE session_summaries ADD COLUMN chroma_merge_synced_at INTEGER');
     }
 
+    // Prompts carry no project of their own — they resolve through
+    // sdk_sessions.project. Without the same pointer here, adoption moved a
+    // worktree's observations and summaries to the parent while its prompts
+    // stayed behind, so any per-project prompts-vs-observations reading
+    // compared two different groupings. sdk_sessions is local-only metadata
+    // (no sync_rev/synced_at), so this pointer never travels through the sync
+    // lane — each device sets it from its own adoption pass.
+    const sessCols = this.db
+      .query('PRAGMA table_info(sdk_sessions)')
+      .all() as TableColumnInfo[];
+    if (!sessCols.some(c => c.name === 'merged_into_project')) {
+      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN merged_into_project TEXT');
+      // Backfill from what adoption already recorded: a project label that was
+      // adopted into a parent stays adopted, and the worktree it came from may
+      // be long deleted, so no future adoption pass would ever cover it.
+      this.db.run(
+        `UPDATE sdk_sessions SET merged_into_project = (
+           SELECT o.merged_into_project FROM observations o
+           WHERE o.project = sdk_sessions.project AND o.merged_into_project IS NOT NULL
+           LIMIT 1
+         )
+         WHERE merged_into_project IS NULL
+           AND project IN (SELECT project FROM observations WHERE merged_into_project IS NOT NULL)`
+      );
+    }
+    this.db.run(
+      'CREATE INDEX IF NOT EXISTS idx_sdk_sessions_merged_into ON sdk_sessions(merged_into_project)'
+    );
+
     // Partial indexes for ChromaMergeDrain: rows adopted into a parent project
     // (merged_into_project set) whose Chroma mirror hasn't been patched yet
     // (chroma_merge_synced_at NULL). The CLI adopt path can't take the Chroma
@@ -2171,7 +2201,7 @@ export class SessionStore {
   }
 
   getRecentSessionsWithStatus(project: string, limit: number = 3, platformSource?: string): RecentSessionStatusRow[] {
-    const params: any[] = [project];
+    const params: any[] = [project, project];
     let platformClause = '';
     if (platformSource) {
       platformClause = `AND COALESCE(NULLIF(s.platform_source, ''), '${DEFAULT_PLATFORM_SOURCE}') = ?`;
@@ -2190,7 +2220,7 @@ export class SessionStore {
           CASE WHEN sum.memory_session_id IS NOT NULL THEN 1 ELSE 0 END as has_summary
         FROM sdk_sessions s
         LEFT JOIN session_summaries sum ON s.memory_session_id = sum.memory_session_id
-        WHERE s.project = ? AND s.memory_session_id IS NOT NULL
+        WHERE (s.project = ? OR s.merged_into_project = ?) AND s.memory_session_id IS NOT NULL
         ${platformClause}
         GROUP BY s.memory_session_id
         ORDER BY s.started_at_epoch DESC
@@ -2808,8 +2838,11 @@ export class SessionStore {
     const additionalConditions: string[] = [];
 
     if (project) {
-      additionalConditions.push('s.project = ?');
-      params.push(project);
+      // Honor the adoption pointer the observation side already honors — a
+      // prompt's project comes from its session, so scoping to a parent
+      // project must reach the sessions its worktrees were adopted into.
+      additionalConditions.push('(s.project = ? OR s.merged_into_project = ?)');
+      params.push(project, project);
     }
 
     if (platformSource) {
@@ -2899,7 +2932,9 @@ export class SessionStore {
     };
     const observationScope = buildScope('o', 'src', true);
     const summaryScope = buildScope('ss', 'src', true);
-    const promptScope = buildScope('s', 's');
+    // sdk_sessions carries the adoption pointer too, so a timeline scoped to a
+    // parent project keeps its prompts next to the observations it adopted.
+    const promptScope = buildScope('s', 's', true);
 
     let startEpoch: number;
     let endEpoch: number;
