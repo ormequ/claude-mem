@@ -338,6 +338,17 @@ after-the-fact justification cannot be told apart from a rationalisation, by the
 anyone. If a run cannot cover something, the cursor records what was left out and why, as
 numbers the next run can act on rather than a sentence it has to trust.
 
+**Three sources sit in the plugin that no lane here reads.** Named because a run that never
+opens them cannot say what it did not look at:
+
+- `session_summaries` — the medium of the first-run pass above, and unread by every other lane.
+- `session_start_context` — renders exactly what the SessionStart hook injects for a project.
+  It is the only way to see which memory actually reaches a context, as opposed to which memory
+  exists. Use it when a Lane B cluster claims a fact was re-derived that the store already held.
+- the `knowledge-agent` corpus tools — semantic questions across the whole history that SQL
+  cannot express. **Leads, never counts:** anything they surface is a candidate for a dig, and a
+  number that came out of them does not go in the report.
+
 **Search truncates the prompt. Fetch the full text before classifying:**
 
 ```
@@ -1076,6 +1087,14 @@ agent per finding, settled in minutes.
 finding of each slice, beats confirming many weak ones — a withdrawal is not wasted work when
 what replaces it is better, and in practice the replacement is the smaller, harder, more useful
 claim.
+
+**Check what the finding's own evidence was authored by.** A withdrawal can invert: a finding
+that a brief cited something "that was never in the repo" has been settled by the tree showing
+the thing present for years — the absence had been written down by an agent whose search
+missed, and then cited as fact by everything downstream. When a dig touches a claim of absence,
+settle it against the tree, and if the claim came from a document rather than the tree, the
+finding is not the absence but **a failed search promoted to a documented fact** — a different
+and more serious defect than the one reported.
 
 **What the second pass is for is replacement, not confirmation.** The pattern to expect: a
 sweeping headline dies and a narrower mechanism takes its place. "Many sessions hunting for a
