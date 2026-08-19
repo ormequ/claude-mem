@@ -37,6 +37,16 @@ describe('plugin/scripts/version-check.js install marker compatibility', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('accepts a matching portable marker when the Codex cache omits dotfiles', () => {
+    writeFileSync(join(tempDir, 'install-version.json'), JSON.stringify({ version: '12.4.4' }));
+
+    const result = runVersionCheck(tempDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
   it('accepts a matching legacy plain-text marker without an upgrade hint', () => {
     writeFileSync(join(tempDir, '.install-version'), '12.4.4\n');
 

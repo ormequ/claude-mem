@@ -176,7 +176,9 @@ function readInstallMarkerVersion(markerPath) {
 
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
-  const markerPath = join(ROOT, '.install-version');
+  const portableMarkerPath = join(ROOT, 'install-version.json');
+  const legacyMarkerPath = join(ROOT, '.install-version');
+  const markerPath = existsSync(portableMarkerPath) ? portableMarkerPath : legacyMarkerPath;
   if (!existsSync(markerPath)) {
     emitUpgradeHint('claude-mem: runtime not yet set up - run: npx claude-mem@latest install');
     process.exit(0);

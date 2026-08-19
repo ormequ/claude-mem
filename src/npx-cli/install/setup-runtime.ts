@@ -75,6 +75,10 @@ function markerPath(targetDir: string): string {
   return join(targetDir, '.install-version');
 }
 
+function portableMarkerPath(targetDir: string): string {
+  return join(targetDir, 'install-version.json');
+}
+
 function spawnVersionProbe(command: string, args: string[]) {
   const options: SpawnSyncOptionsWithStringEncoding = {
     encoding: 'utf-8',
@@ -459,7 +463,9 @@ export async function installPluginDependencies(targetDir: string, bunPath: stri
 }
 
 export function readInstallMarker(targetDir: string): MarkerSchema | null {
-  const path = markerPath(targetDir);
+  const path = existsSync(portableMarkerPath(targetDir))
+    ? portableMarkerPath(targetDir)
+    : markerPath(targetDir);
   if (!existsSync(path)) return null;
   const content = readFileSync(path, 'utf-8');
   try {
@@ -491,7 +497,9 @@ export function writeInstallMarker(
     uv: uvVersion,
     installedAt: new Date().toISOString(),
   };
-  writeFileSync(markerPath(targetDir), JSON.stringify(payload));
+  const serialized = JSON.stringify(payload);
+  writeFileSync(portableMarkerPath(targetDir), serialized);
+  writeFileSync(markerPath(targetDir), serialized);
 }
 
 export function isInstallCurrent(targetDir: string, expectedVersion: string): boolean {

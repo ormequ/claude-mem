@@ -79,6 +79,14 @@ describe('setup-runtime install marker', () => {
   });
 
   describe('writeInstallMarker', () => {
+    it('writes a portable marker that survives Codex marketplace caching', () => {
+      writeInstallMarker(tempDir, '12.4.7', '1.2.0', '0.4.18');
+
+      const path = join(tempDir, 'install-version.json');
+      expect(existsSync(path)).toBe(true);
+      expect(JSON.parse(readFileSync(path, 'utf-8')).version).toBe('12.4.7');
+    });
+
     it('writes a JSON file with the canonical schema { version, bun, uv, installedAt }', () => {
       writeInstallMarker(tempDir, '12.4.7', '1.2.0', '0.4.18');
 
