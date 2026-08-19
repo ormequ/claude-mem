@@ -170,7 +170,7 @@ function buildInjectStats(
 export async function generateContextWithStats(
   input?: ContextInput,
   forHuman: boolean = false
-): Promise<{ text: string; stats: ContextInjectStats | null }> {
+): Promise<{ text: string; stats: ContextInjectStats | null; injectedObservationIds: number[] }> {
   const config = loadContextConfig();
   const cwd = input?.cwd ?? process.cwd();
   const context = getProjectContext(cwd);
@@ -185,7 +185,7 @@ export async function generateContextWithStats(
 
   const rawDb = initializeDatabase();
   if (!rawDb) {
-    return { text: '', stats: null };
+    return { text: '', stats: null, injectedObservationIds: [] };
   }
 
   try {
@@ -198,7 +198,7 @@ export async function generateContextWithStats(
     const summaries = querySummariesMulti(db, queryProjects, config);
 
     if (observations.length === 0 && summaries.length === 0) {
-      return { text: renderEmptyState(project, forHuman), stats: null };
+      return { text: renderEmptyState(project, forHuman), stats: null, injectedObservationIds: [] };
     }
 
     const output = buildContextOutput(
@@ -211,7 +211,22 @@ export async function generateContextWithStats(
       forHuman
     );
 
-    return { text: output, stats: buildInjectStats(observations, summaries, Boolean(input?.full)) };
+    // The ids that were rendered, for the caller to count as retrievals (see
+    // src/services/sqlite/observations/relevance.ts). This function stays
+    // strictly read-only — it holds a READ-ONLY connection by design, and the
+    // SessionStart hook must never wait on a write lock to get its context
+    // (tests/context/context-builder-readonly.test.ts pins both). The worker
+    // route owns the writable connection and does the counting after it has
+    // already answered.
+    const injectedObservationIds = observations
+      .map(o => o.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    return {
+      text: output,
+      stats: buildInjectStats(observations, summaries, Boolean(input?.full)),
+      injectedObservationIds,
+    };
   } finally {
     rawDb.close();
   }

@@ -508,7 +508,7 @@ export class WorkerService implements WorkerRef {
       adoptMergedWorktreesForAllKnownRepos({}).then(adoptions => {
         if (adoptions) {
           for (const adoption of adoptions) {
-            if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.chromaQueued > 0) {
+            if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.adoptedSessions > 0 || adoption.chromaQueued > 0) {
               logger.info('SYSTEM', 'Merged worktrees adopted in background', adoption);
             }
             if (adoption.errors.length > 0) {
@@ -1420,6 +1420,7 @@ async function main() {
       console.log(`  Merged branches:      ${result.mergedBranches.join(', ') || '(none)'}`);
       console.log(`  Observations adopted: ${result.adoptedObservations}`);
       console.log(`  Summaries adopted:    ${result.adoptedSummaries}`);
+      console.log(`  Sessions adopted:     ${result.adoptedSessions} (carries their prompts)`);
       if (result.dryRun) {
         console.log(`  Chroma patch:         ${result.chromaQueued} rows would be queued`);
       } else {

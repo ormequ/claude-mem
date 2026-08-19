@@ -80,3 +80,29 @@
   collision fix, so that delta is gone; `ChromaMergeDrain` maps to it.
   `tests/services/infrastructure/worktree-adoption-chroma.test.ts` (upstream
   #3331) was rewritten to assert the queue, not an inline Chroma write.
+
+## The session pointer (prompts follow their observations)
+
+- Adoption also sets `merged_into_project` on `sdk_sessions`
+  (`SessionStore.ensureMergedIntoProjectColumns`, `WorktreeAdoption`,
+  `OrphanAdoption`), and every project-scoped prompt read resolves it
+  (`SessionSearch.searchUserPrompts`, `SessionStore.getUserPromptsByIds`,
+  the timeline prompt scope, `PaginationHelper`). Upstream carries the pointer
+  on `observations` and `session_summaries` only. Prompts have no project
+  column of their own — they resolve through their session — so an adopted
+  worktree used to hand its observations to the parent while its prompts stayed
+  on the worktree label. A project-scoped read then saw observations with no
+  prompts behind them, and any prompts-vs-observations reading compared two
+  different groupings.
+- `sdk_sessions` carries no `sync_rev`/`synced_at`, so it stays out of the sync
+  outbox: the pointer is local and each device sets it from its own adoption
+  pass. The remap op's table set is unchanged, so replicas on older code stay
+  compatible.
+- The column migration backfills from the pointer adoption already recorded on
+  `observations`, keyed by project label — the worktree a label came from is
+  usually deleted by then, so no future adoption pass would ever cover it.
+- Chroma's per-project prompt collections are still keyed by the raw session
+  project. Prompt search reads SQLite on every strategy
+  (`SearchManager` calls `searchUserPrompts` on the Chroma path too), so the
+  read paths are correct; a semantic prompt lane over Chroma would need a
+  drain like `ChromaMergeDrain`.

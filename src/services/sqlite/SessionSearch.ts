@@ -461,8 +461,9 @@ export class SessionSearch {
 
     const baseConditions: string[] = [];
     if (sessionFilters.project) {
-      baseConditions.push('s.project = ?');
-      sessionParams.push(sessionFilters.project);
+      // `s` is session_summaries here — same adoption pointer as buildFilterClause.
+      baseConditions.push('(s.project = ? OR s.merged_into_project = ?)');
+      sessionParams.push(sessionFilters.project, sessionFilters.project);
     }
 
     if (sessionFilters.platformSource) {
@@ -541,8 +542,12 @@ export class SessionSearch {
 
     const baseConditions: string[] = [];
     if (filters.project) {
-      baseConditions.push('s.project = ?');
-      params.push(filters.project);
+      // A prompt inherits its project from its session, so the parent scope has
+      // to follow sdk_sessions' adoption pointer the way observations do —
+      // otherwise an adopted worktree's prompts vanish from the parent project
+      // while its observations stay visible.
+      baseConditions.push('(s.project = ? OR s.merged_into_project = ?)');
+      params.push(filters.project, filters.project);
     }
 
     if (filters.platformSource) {
