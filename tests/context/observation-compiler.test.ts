@@ -295,6 +295,78 @@ describe('context compiler cross-harness reads', () => {
   });
 });
 
+describe('session count counts sessions, not summary rows', () => {
+  const config: ContextConfig = {
+    totalObservationCount: 20,
+    fullObservationCount: 3,
+    sessionCount: 2,
+    showReadTokens: true,
+    showWorkTokens: true,
+    showSavingsAmount: true,
+    showSavingsPercent: true,
+    observationTypes: new Set(['discovery']),
+    observationConcepts: new Set(['platform-scope']),
+    fullObservationField: 'narrative',
+    showLastSummary: true,
+    showLastMessage: false,
+  };
+
+  function seedSummary(
+    store: SessionStore,
+    memorySessionId: string,
+    request: string,
+    createdAtEpoch: number,
+  ): void {
+    store.storeSummary(
+      memorySessionId,
+      'compaction-heavy',
+      {
+        request,
+        investigated: 'investigated',
+        learned: 'learned',
+        completed: 'completed',
+        next_steps: 'next',
+        notes: null,
+      },
+      1,
+      0,
+      createdAtEpoch,
+    );
+  }
+
+  it('returns the newest summary of each distinct session when one session wrote many', () => {
+    const store = new SessionStore(':memory:');
+    try {
+      for (const [index, memorySessionId] of ['mem-old', 'mem-mid', 'mem-new'].entries()) {
+        const sessionDbId = store.createSDKSession(`content-${memorySessionId}`, 'compaction-heavy', 'prompt');
+        store.ensureMemorySessionIdRegistered(sessionDbId, memorySessionId);
+        // The newest session compacted repeatedly: many rows, one session.
+        const rows = memorySessionId === 'mem-new' ? 5 : 1;
+        for (let row = 0; row < rows; row++) {
+          seedSummary(
+            store,
+            memorySessionId,
+            `${memorySessionId.toUpperCase()}_${row}`,
+            1_700_000_000_000 + index * 1_000_000 + row * 1_000,
+          );
+        }
+      }
+
+      const summaries = querySummariesMulti(store, ['compaction-heavy'], config);
+
+      // sessionCount 2 + SUMMARY_LOOKAHEAD 1 = three distinct sessions, newest
+      // first, each represented by its latest row -- not five rows of one session.
+      expect(summaries.map(summary => summary.request)).toEqual([
+        'MEM-NEW_4',
+        'MEM-MID_0',
+        'MEM-OLD_0',
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+});
+
 describe('concept exact-match injection (#3379)', () => {
   const config: ContextConfig = {
     totalObservationCount: 20,

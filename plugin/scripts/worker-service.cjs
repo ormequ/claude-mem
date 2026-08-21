@@ -301,23 +301,39 @@ ${e}`,o=n$(s,i),a=`${t}.tmp`;try{(0,Xi.writeFileSync)(a,o),(0,Xi.renameSync)(a,t
     WHERE (o.project IN (${r})
        OR o.merged_into_project IN (${r}))
   `).get(...e,...e)?.count??0}function Gne(t,e,r){let n=e.map(()=>"?").join(",");return t.db.prepare(`
+    WITH ranked AS (
+      SELECT
+        ss.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY ss.memory_session_id
+          ORDER BY ss.created_at_epoch DESC, ss.id DESC
+        ) AS session_rank
+      FROM session_summaries ss
+      WHERE (ss.project IN (${n})
+             OR ss.merged_into_project IN (${n}))
+        AND (
+          trim(COALESCE(ss.investigated, '')) <> ''
+          OR trim(COALESCE(ss.learned, '')) <> ''
+          OR trim(COALESCE(ss.completed, '')) <> ''
+          OR trim(COALESCE(ss.next_steps, '')) <> ''
+        )
+    )
     SELECT
-      ss.id,
-      ss.memory_session_id,
+      r.id,
+      r.memory_session_id,
       COALESCE(s.platform_source, 'claude') as platform_source,
-      ss.request,
-      ss.investigated,
-      ss.learned,
-      ss.completed,
-      ss.next_steps,
-      ss.created_at,
-      ss.created_at_epoch,
-      ss.project
-    FROM session_summaries ss
-    LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
-    WHERE (ss.project IN (${n})
-           OR ss.merged_into_project IN (${n}))
-    ORDER BY ss.created_at_epoch DESC
+      r.request,
+      r.investigated,
+      r.learned,
+      r.completed,
+      r.next_steps,
+      r.created_at,
+      r.created_at_epoch,
+      r.project
+    FROM ranked r
+    LEFT JOIN sdk_sessions s ON r.memory_session_id = s.memory_session_id
+    WHERE r.session_rank = 1
+    ORDER BY r.created_at_epoch DESC
     LIMIT ?
   `).all(...e,...e,r.sessionCount+PH)}function qWe(t){return t.replace(/[/.]/g,"-")}function HWe(t){if(!t.includes('"type":"assistant"'))return null;let e=JSON.parse(t);if(e.type==="assistant"&&e.message?.content&&Array.isArray(e.message.content)){let r="";for(let n of e.message.content)n.type==="text"&&(r+=n.text);if(r=r.replace(MS,"").trim(),r)return r}return null}function BWe(t){for(let e=t.length-1;e>=0;e--)try{let r=HWe(t[e]);if(r)return r}catch(r){r instanceof Error?h.debug("WORKER","Skipping malformed transcript line",{lineIndex:e},r):h.debug("WORKER","Skipping malformed transcript line",{lineIndex:e,error:String(r)});continue}return""}function WWe(t){try{if(!(0,Cx.existsSync)(t))return{assistantMessage:""};let e=(0,Cx.readFileSync)(t,"utf-8").trim();if(!e)return{assistantMessage:""};let r=e.split(`
 `).filter(s=>s.trim());return{assistantMessage:BWe(r)}}catch(e){return e instanceof Error?h.failure("WORKER","Failed to extract prior messages from transcript",{transcriptPath:t},e):h.warn("WORKER","Failed to extract prior messages from transcript",{transcriptPath:t,error:String(e)}),{assistantMessage:""}}}function Kne(t,e,r,n){if(!e.showLastMessage||t.length===0)return{assistantMessage:""};let s=t.find(c=>c.memory_session_id!==r);if(!s)return{assistantMessage:""};let i=s.memory_session_id,o=qWe(n),a=Hne.default.join(Dv,"projects",o,`${i}.jsonl`);return WWe(a)}function Vne(t,e){let r=qne(e),n=new Set(qne(t).map(i=>i.id)),s=r[0]?.id;return r.filter(i=>n.has(i.id)).map((i,o)=>{let a=o===0?null:r[o+1];return{...i,displayEpoch:a?a.created_at_epoch:i.created_at_epoch,displayTime:a?a.created_at:i.created_at,shouldShowLink:i.id!==s}})}function GWe(t){return!!(t.investigated?.trim()||t.learned?.trim()||t.completed?.trim()||t.next_steps?.trim())}function qne(t){let e=new Set,r=[];for(let n of t)GWe(n)&&(e.has(n.memory_session_id)||(e.add(n.memory_session_id),r.push(n)));return r}function Xne(t,e){let r=[...t.map(n=>({type:"observation",data:n})),...e.map(n=>({type:"summary",data:n}))];return r.sort((n,s)=>{let i=n.type==="observation"?n.data.created_at_epoch:n.data.displayEpoch,o=s.type==="observation"?s.data.created_at_epoch:s.data.displayEpoch;return i-o}),r}function Yne(t,e){return new Set(t.slice(0,e).map(r=>r.id))}var Hne,Cx,hL=B(()=>{"use strict";Hne=oe(require("path"),1),Cx=require("fs");G();tc();Ee();md()});function Zne(){let t=Re.settings(),e=ue.loadFromFile(t),r=Et.getInstance().getActiveMode(),n=new Set(r.observation_types.map(i=>i.id)),s=new Set(r.observation_concepts.map(i=>i.id));return{totalObservationCount:parseInt(e.CLAUDE_MEM_CONTEXT_OBSERVATIONS,10),fullObservationCount:parseInt(e.CLAUDE_MEM_CONTEXT_FULL_COUNT,10),sessionCount:parseInt(e.CLAUDE_MEM_CONTEXT_SESSION_COUNT,10),showReadTokens:e.CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS==="true",showWorkTokens:e.CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS==="true",showSavingsAmount:e.CLAUDE_MEM_CONTEXT_SHOW_SAVINGS_AMOUNT==="true",showSavingsPercent:e.CLAUDE_MEM_CONTEXT_SHOW_SAVINGS_PERCENT==="true",observationTypes:n,observationConcepts:s,fullObservationField:e.CLAUDE_MEM_CONTEXT_FULL_FIELD,showLastSummary:e.CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY==="true",showLastMessage:e.CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE==="true"}}var Jne=B(()=>{"use strict";vt();Ee();Js()});function Qne(t){let e=(t.title?.length||0)+(t.subtitle?.length||0)+(t.narrative?.length||0)+JSON.stringify(t.facts||[]).length;return Math.ceil(e/Bm)}function gL(t){let e=t.length,r=t.reduce((o,a)=>o+Qne(a),0),n=t.reduce((o,a)=>o+(a.discovery_tokens||0),0),s=n-r,i=n>0?Math.round(s/n*100):0;return{totalObservations:e,totalReadTokens:r,totalDiscoveryTokens:n,savings:s,savingsPercent:i}}function KWe(t){return Et.getInstance().getWorkEmoji(t)}function hy(t,e){let r=Qne(t),n=t.discovery_tokens||0,s=KWe(t.type),i=n>0?`${s} ${n.toLocaleString()}`:"-";return{readTokens:r,discoveryTokens:n,discoveryDisplay:i,workEmoji:s}}function Ix(t){return t.showReadTokens||t.showWorkTokens||t.showSavingsAmount||t.showSavingsPercent}var af=B(()=>{"use strict";md();Js()});function ese(){let t=new Date,e=t.toLocaleDateString("en-CA"),r=t.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:!0}).toLowerCase().replace(" ",""),n=t.toLocaleTimeString("en-US",{timeZoneName:"short"}).split(" ").pop();return`${e} ${r} ${n}`}function tse(t){return[`# [${t}] recent context, ${ese()}`,""]}function rse(){return[`Legend: \u{1F3AF}session ${Et.getInstance().getActiveMode().observation_types.map(r=>`${r.emoji}${r.id}`).join(" ")}`,"Format: ID TIME TYPE TITLE","Fetch details: get_observations([IDs]) | Search: mem-search skill",""]}function nse(t,e){let r=[],n=[`${t.totalObservations} obs (${t.totalReadTokens.toLocaleString()}t read)`,`${t.totalDiscoveryTokens.toLocaleString()}t work`];return t.totalDiscoveryTokens>0&&(e.showSavingsAmount||e.showSavingsPercent)&&(e.showSavingsPercent?n.push(`${t.savingsPercent}% savings`):e.showSavingsAmount&&n.push(`${t.savings.toLocaleString()}t saved`)),r.push(`Stats: ${n.join(" | ")}`),r.push(""),r}function sse(t){return[`### ${t}`]}function ise(t){return t.toLowerCase().replace(" am","a").replace(" pm","p")}function ose(t,e,r){let n=t.title||"Untitled",s=Et.getInstance().getTypeIcon(t.type),i=e?ise(e):'"';return`${t.id} ${i} ${s} ${n}`}function ase(t,e,r,n){let s=[],i=t.title||"Untitled",o=Et.getInstance().getTypeIcon(t.type),a=e?ise(e):'"',{readTokens:c,discoveryDisplay:l}=hy(t,n);s.push(`**${t.id}** ${a} ${o} **${i}**`),r&&s.push(r);let u=[];return n.showReadTokens&&u.push(`~${c}t`),n.showWorkTokens&&u.push(l),u.length>0&&s.push(u.join(" ")),s.push(""),s}function cse(t,e){return[`S${t.id} ${t.request||"Session started"} (${e})`]}function gy(t,e){return e?[`**${t}**: ${e}`,""]:[]}function lse(t){return t.assistantMessage?["","---","","**Previously**","",`A: ${t.assistantMessage}`,""]:[]}function use(t,e){return["",`Access ${Math.round(t/1e3)}k tokens of past work via get_observations([IDs]) or mem-search skill.`]}function dse(t){return`# [${t}] recent context, ${ese()}

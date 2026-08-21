@@ -99,24 +99,45 @@ export function querySummariesMulti(
 ): SessionSummary[] {
   const projectPlaceholders = projects.map(() => '?').join(',');
 
+  // fork: one long session writes a summary row per compaction, so a plain
+  // `LIMIT sessionCount` counted rows, not sessions -- the caller's dedupe by
+  // memory_session_id then collapsed a whole page of rows into a single session
+  // (11 rows, 1 session shown). Rank inside each session first and keep only its
+  // newest content-bearing row, so the limit means "this many distinct sessions".
   return db.db.prepare(`
+    WITH ranked AS (
+      SELECT
+        ss.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY ss.memory_session_id
+          ORDER BY ss.created_at_epoch DESC, ss.id DESC
+        ) AS session_rank
+      FROM session_summaries ss
+      WHERE (ss.project IN (${projectPlaceholders})
+             OR ss.merged_into_project IN (${projectPlaceholders}))
+        AND (
+          trim(COALESCE(ss.investigated, '')) <> ''
+          OR trim(COALESCE(ss.learned, '')) <> ''
+          OR trim(COALESCE(ss.completed, '')) <> ''
+          OR trim(COALESCE(ss.next_steps, '')) <> ''
+        )
+    )
     SELECT
-      ss.id,
-      ss.memory_session_id,
+      r.id,
+      r.memory_session_id,
       COALESCE(s.platform_source, 'claude') as platform_source,
-      ss.request,
-      ss.investigated,
-      ss.learned,
-      ss.completed,
-      ss.next_steps,
-      ss.created_at,
-      ss.created_at_epoch,
-      ss.project
-    FROM session_summaries ss
-    LEFT JOIN sdk_sessions s ON ss.memory_session_id = s.memory_session_id
-    WHERE (ss.project IN (${projectPlaceholders})
-           OR ss.merged_into_project IN (${projectPlaceholders}))
-    ORDER BY ss.created_at_epoch DESC
+      r.request,
+      r.investigated,
+      r.learned,
+      r.completed,
+      r.next_steps,
+      r.created_at,
+      r.created_at_epoch,
+      r.project
+    FROM ranked r
+    LEFT JOIN sdk_sessions s ON r.memory_session_id = s.memory_session_id
+    WHERE r.session_rank = 1
+    ORDER BY r.created_at_epoch DESC
     LIMIT ?
   `).all(
     ...projects,
