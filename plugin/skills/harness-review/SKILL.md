@@ -1263,6 +1263,18 @@ re-derived facts, worked-around errors, rule compliance, task outcomes — five.
 empty, or that does not exist yet reads exactly like a lane that ran clean, and the difference
 is the whole value of the report. "No outcome lane" is a result; silence is not.
 
+**The prompt lane reports two counts, side by side and never merged into one:** corrections —
+the user repairing something the agent did or failed to do — and the constraints the user loaded
+into a request *before* anything failed, because they had learned the agent would otherwise get
+it wrong. The second is not part of the correction rate and never enters it; reported alone,
+either one can fall for the wrong reason (see the prompt lane, and the trap it is the instrument
+for). Refer to them by shape here — whatever the vocabulary file calls the second one is that
+store's business, not this contract's.
+
+**A period with none of the second kind is reported as zero.** An omitted count and a count of
+zero read identically to the next run, and only one of them is evidence: zero says the lane was
+read and the shape was absent, silence says nothing at all. Same rule as the lanes above.
+
 **Report what improved, held to the same evidence standard as everything else.** A report made
 only of failures describes a harness that has never once got better, and the owner cannot tell a
 period where the fixes held from a period where nobody checked. Three sources, all already
