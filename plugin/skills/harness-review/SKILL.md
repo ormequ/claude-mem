@@ -576,6 +576,41 @@ as real.** Two passes reporting very different S1 counts may be using the same b
 periods — measured, that is exactly what happened once, and the obvious reading would have been
 wrong in the direction that suppresses incidents.
 
+### The other direction: what the user says before the failure, not after
+
+**Every label above is retrospective.** The user says the agent got it wrong, and the lane counts
+it. Nothing so far counts the opposite shape: a constraint loaded into the request *in advance*
+because the user has learned that otherwise the agent will get it wrong — "and don't forget X",
+"same as last time", "only don't do Y". Nothing has failed in that prompt, so its primary label
+is `neutral` and stays there. What it carries is a **tag**, and the tag is evidence: the defect
+is alive, and the user is now paying its cost instead of the harness.
+
+**This is the instrument for a trap this file already names and does not measure.** The trap
+table warns against reading the prompt stream as a stationary instrument — once the user learns
+the agent drops something, the "you forgot X" prompt disappears while the defect does not, and
+the correction rate falls for the wrong reason. Naming the trap does not detect it. Counting both
+shapes side by side separates the two readings:
+
+- Corrections fall and pre-emptive instructions fall with them — the defect is gone.
+- Corrections fall while pre-emptive instructions rise — the defect survived and moved onto the
+  user. That is not an improvement, and under the correction rate alone it is indistinguishable
+  from one.
+
+**Report the two counts beside each other, never merged into one.** A pre-emptive instruction is
+not a correction and must not enter the correction rate: it repaired nothing, and folding it in
+would penalise the user for having learned to work around the defect.
+
+**Only count it when the constraint it carries matches a defect this review has seen elsewhere**
+— a correction in an earlier window, a Lane B fact the agent keeps re-deriving, a Lane D rule
+that is written and not followed. Without that match a specific instruction is just a specific
+instruction: people are allowed to be precise about what they want, and reading ordinary
+precision as harness failure inflates the lane with everything the user happens to spell out.
+
+**Name the tag in the vocabulary file, not here.** What this shape is called, and which
+constraints count as instances of it, is derived from one person's prompts like every other
+category in this lane; this file ships the distinction and the reading it enables, and no
+wording for either.
+
 ### The agent side
 
 Corrections only mean something against the volume of work that drew them.
@@ -1337,7 +1372,7 @@ Each was observed in baseline runs of this exact task, three of three agents unl
 | Reporting a total row count as evidence the store is fine | A dead store and a healthy one have identical totals. Three of three missed a three-day outage this way. |
 | Classifying by keyword search | One run searched for two reason-demanding phrasings and never saw the period's largest category at all, because its owner's word for it was not on the list. |
 | Counting label frequency in observations instead of prompts | Observation labels track the extraction prompt, not reality; one type has been measured mistyped for months on end. Prompts are the user's own words — but see the row below before treating them as stable. |
-| Treating the prompt stream as a stationary instrument | The words do not drift; the *behaviour* does. Once the user learns the agent drops items, they write "and don't forget X" in advance. The "you forgot X" prompt disappears, the defect does not. A falling correction rate is not evidence of improvement until a non-prompt lane agrees. |
+| Treating the prompt stream as a stationary instrument | The words do not drift; the *behaviour* does. Once the user learns the agent drops items, they write "and don't forget X" in advance. The "you forgot X" prompt disappears, the defect does not. A falling correction rate is not evidence of improvement until a non-prompt lane agrees. The instrument that tells the two apart is the pre-emptive-instruction tag in the prompt lane; count it, do not just avoid the trap. |
 | Presenting claude-mem's own audit findings as new discoveries | The audits wrote their conclusions into `observations`, so a retro will "find" them. Ask whether a finding is about the work or about a previous review of the work. |
 | Proposing prose habits | See the contract above. |
 | Running the prompt lane and calling it the review | The lane goes quiet as the user adapts around a defect, and it never held the silent failures at all. A correction rate that fell while Lane C shows the same denial for two months has not measured an improvement. |
