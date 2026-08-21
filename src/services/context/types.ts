@@ -62,8 +62,6 @@ export interface SessionSummary {
 }
 
 export interface SummaryTimelineItem extends SessionSummary {
-  displayEpoch: number;
-  displayTime: string;
   shouldShowLink: boolean;
 }
 
@@ -97,4 +95,3 @@ export const colors = {
 };
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const SUMMARY_LOOKAHEAD = 1;

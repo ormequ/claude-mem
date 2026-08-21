@@ -13,8 +13,7 @@ export function groupTimelineByDay(timeline: TimelineItem[]): Map<string, Timeli
   const itemsByDay = new Map<string, TimelineItem[]>();
 
   for (const item of timeline) {
-    const itemDate = item.type === 'observation' ? item.data.created_at : item.data.displayTime;
-    const day = formatDate(itemDate);
+    const day = formatDate(item.data.created_at);
     if (!itemsByDay.has(day)) {
       itemsByDay.set(day, []);
     }
@@ -52,7 +51,7 @@ function renderDayTimelineAgent(
   for (const item of dayItems) {
     if (item.type === 'summary') {
       const summary = item.data as SummaryTimelineItem;
-      const formattedTime = formatDateTime(summary.displayTime);
+      const formattedTime = formatDateTime(summary.created_at);
       output.push(...Agent.renderAgentSummaryItem(summary, formattedTime));
     } else {
       const obs = item.data as Observation;
@@ -95,7 +94,7 @@ function renderDayTimelineHuman(
       lastTime = '';
 
       const summary = item.data as SummaryTimelineItem;
-      const formattedTime = formatDateTime(summary.displayTime);
+      const formattedTime = formatDateTime(summary.created_at);
       output.push(...Human.renderHumanSummaryItem(summary, formattedTime));
     } else {
       const obs = item.data as Observation;

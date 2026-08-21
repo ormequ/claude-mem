@@ -39,8 +39,6 @@ function createTestSummaryTimelineItem(overrides: Partial<SummaryTimelineItem> =
     next_steps: 'Next steps',
     created_at: '2025-01-01T12:00:00.000Z',
     created_at_epoch: 1735732800000,
-    displayEpoch: 1735732800000,
-    displayTime: '2025-01-01T12:00:00.000Z',
     shouldShowLink: false,
     ...overrides,
   };
@@ -52,7 +50,7 @@ describe('buildTimeline', () => {
         createTestObservation({ id: 1, created_at_epoch: 1000 }),
       ];
       const summaries = [
-        createTestSummaryTimelineItem({ id: 1, displayEpoch: 2000 }),
+        createTestSummaryTimelineItem({ id: 1, created_at_epoch: 2000 }),
       ];
 
       const timeline = buildTimeline(observations, summaries);
@@ -66,7 +64,7 @@ describe('buildTimeline', () => {
         createTestObservation({ id: 2, created_at_epoch: 1000 }),
       ];
       const summaries = [
-        createTestSummaryTimelineItem({ id: 1, displayEpoch: 2000 }),
+        createTestSummaryTimelineItem({ id: 1, created_at_epoch: 2000 }),
       ];
 
       const timeline = buildTimeline(observations, summaries);
@@ -81,7 +79,7 @@ describe('buildTimeline', () => {
 
     it('should handle empty observations array', () => {
       const summaries = [
-        createTestSummaryTimelineItem({ id: 1, displayEpoch: 1000 }),
+        createTestSummaryTimelineItem({ id: 1, created_at_epoch: 1000 }),
       ];
 
       const timeline = buildTimeline([], summaries);
@@ -122,22 +120,19 @@ describe('buildTimeline', () => {
       expect(summaryItem!.data).toHaveProperty('request');
     });
 
-    it('should use displayEpoch for summary sorting, not created_at_epoch', () => {
+    it('sorts a summary by its own time, so it closes the session it describes', () => {
       const observations = [
         createTestObservation({ id: 1, created_at_epoch: 2000 }),
       ];
       const summaries = [
-        createTestSummaryTimelineItem({
-          id: 1,
-          created_at_epoch: 3000, // Created later
-          displayEpoch: 1000,     // But displayed earlier
-        }),
+        // Written at the end of the session, after that session's observations.
+        createTestSummaryTimelineItem({ id: 1, created_at_epoch: 3000 }),
       ];
 
       const timeline = buildTimeline(observations, summaries);
 
-      expect(timeline[0].type).toBe('summary');
-      expect(timeline[1].type).toBe('observation');
+      expect(timeline[0].type).toBe('observation');
+      expect(timeline[1].type).toBe('summary');
     });
 });
 
@@ -354,12 +349,11 @@ describe('session count counts sessions, not summary rows', () => {
 
       const summaries = querySummariesMulti(store, ['compaction-heavy'], config);
 
-      // sessionCount 2 + SUMMARY_LOOKAHEAD 1 = three distinct sessions, newest
-      // first, each represented by its latest row -- not five rows of one session.
+      // sessionCount 2 = two distinct sessions, newest first, each represented by
+      // its latest row -- not five rows of the one session that kept compacting.
       expect(summaries.map(summary => summary.request)).toEqual([
         'MEM-NEW_4',
         'MEM-MID_0',
-        'MEM-OLD_0',
       ]);
     } finally {
       store.close();

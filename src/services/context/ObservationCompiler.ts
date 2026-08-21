@@ -13,7 +13,6 @@ import type {
   TimelineItem,
   PriorMessages,
 } from './types.js';
-import { SUMMARY_LOOKAHEAD } from './types.js';
 
 // Project-level context reads are intentionally cross-harness in this fork:
 // a session started under any harness (Claude Code, Codex, …) sees the whole
@@ -142,7 +141,7 @@ export function querySummariesMulti(
   `).all(
     ...projects,
     ...projects,
-    config.sessionCount + SUMMARY_LOOKAHEAD
+    config.sessionCount
   ) as SessionSummary[];
 }
 
@@ -235,15 +234,17 @@ export function prepareSummariesForTimeline(
   const displayIds = new Set(dedupeSummariesForTimeline(displaySummaries).map(summary => summary.id));
   const mostRecentSummaryId = dedupedAllSummaries[0]?.id;
 
-  return dedupedAllSummaries.filter(summary => displayIds.has(summary.id)).map((summary, i) => {
-    const olderSummary = i === 0 ? null : dedupedAllSummaries[i + 1];
-    return {
-      ...summary,
-      displayEpoch: olderSummary ? olderSummary.created_at_epoch : summary.created_at_epoch,
-      displayTime: olderSummary ? olderSummary.created_at : summary.created_at,
-      shouldShowLink: summary.id !== mostRecentSummaryId
-    };
-  });
+  // fork: a summary used to be timestamped with the PREVIOUS session's time, so
+  // that its header landed before the observations it covered. That anchor is
+  // also what the renderer prints, so every session but the newest advertised a
+  // wrong time -- and, once the session limit really returned distinct sessions,
+  // a wrong day too (a session from Aug 17 filed under Aug 16). Each summary now
+  // carries its own time; it sorts after its session's observations instead of
+  // before them, which is what actually happened.
+  return dedupedAllSummaries.filter(summary => displayIds.has(summary.id)).map(summary => ({
+    ...summary,
+    shouldShowLink: summary.id !== mostRecentSummaryId
+  }));
 }
 
 function hasSummaryContent(summary: SessionSummary): boolean {
@@ -284,11 +285,7 @@ export function buildTimeline(
     ...summaries.map(summary => ({ type: 'summary' as const, data: summary }))
   ];
 
-  timeline.sort((a, b) => {
-    const aEpoch = a.type === 'observation' ? a.data.created_at_epoch : a.data.displayEpoch;
-    const bEpoch = b.type === 'observation' ? b.data.created_at_epoch : b.data.displayEpoch;
-    return aEpoch - bEpoch;
-  });
+  timeline.sort((a, b) => a.data.created_at_epoch - b.data.created_at_epoch);
 
   return timeline;
 }
