@@ -1441,6 +1441,44 @@ fraction of findings — they diverge rather than cover.
 |---|---|
 | "Consider a lighter-weight surfacing habit on scope-changing calls" | "Whitelist these two cache paths in the sandbox config — N observations across the period hit `Operation not permitted` on them, and twice the agent's fallback was to disable the sandbox entirely" |
 
+## Retiring this file's own rules
+
+Every rule here was written in response to a measured failure class, and nothing here takes one
+out again. A review whose only available move is to add a prohibition grows in one direction
+until it stops being read in full — and a rule nobody reads enforces nothing, whatever it says.
+
+**Record the failure class beside the rule, in the run that writes the rule.** Not afterwards and
+not reconstructed later: the run that adds a rule is the only one that holds what it was reacting
+to, and a rule whose class cannot be named was never grounded in anything measurable in the first
+place.
+
+**Then use the mechanism this file already has, pointed at a different subject.** Lane B collapses
+a cluster whose newest occurrence predates the last two runs. Apply that same bookkeeping to the
+rules: a class that has not recurred across the same two quiet runs makes its rule a candidate for
+removal. This is deliberately not a second scheme — one quiet-period convention with two subjects,
+so the runs that count for a cluster are the runs that count for a rule, and neither needs a
+counter of its own.
+
+**A candidate is confirmed by one ablation, and never by the counter.** The quiet period only
+nominates; nothing is removed because a period expired. It is removed after a single run performed
+without the rule: if the finding the rule exists to produce still comes out, the rule was not doing
+the work. This is the local substitute for the published signal — the base model passing a skill's
+evals with the skill unloaded — which is unavailable here because there are no evals to pass. A
+later run should know which of the two it is holding: the same logic on a weaker instrument.
+
+**The weakness belongs in the rule, not in whatever a reader works out later: a rule that is
+working looks exactly like a rule that is unnecessary.** Neither produces failures — not producing
+failures is what a working rule does. No count separates them, and the ablation is the only thing
+that can:
+
+- **One suspect at a time.** A run performed without several rules cannot attribute its result to
+  any one of them, so the tempting cleanup — drop the whole quiet set, see whether anything breaks
+  — produces an answer that cannot be read. A batch ablation is not a cheaper version of this
+  check; it is not the check.
+- **It costs a whole run**, and that is the price of the only honest answer available here. A
+  candidate waits its turn, and a run carrying an ablation says so in its report, because every
+  number it produces was measured under a different rule set than the run before it.
+
 ## Common mistakes
 
 Each was observed in baseline runs of this exact task, three of three agents unless noted.
