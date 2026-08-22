@@ -14,9 +14,9 @@ allowed-tools:
 
 # harness-review
 
-**A retrospective that produces no number produces no improvement.** Two months and roughly
-thirty retrospectives once yielded zero measurable change while feeling productive, because
-nothing was counted. Count first, read second, and propose only things a machine can enforce.
+**A retrospective that produces no number produces no improvement.** Months of them can feel
+productive and change nothing measurable, because nothing was counted. Count first, read second,
+and propose only things a machine can enforce.
 
 **Several lanes, because no single one is trustworthy.** The user's prompts are the only signal
 generated outside the system being measured — and they only exist where a failure was annoying
@@ -36,8 +36,7 @@ identifiers (file paths, service names, error strings) verbatim; translate only 
 names, provider strings, a stack's file patterns — all of it is one person's setup, and shipped
 here it reads as a norm to everyone else. This file carries rules and shapes; the evidence
 behind them lives beside the other state, in `~/.claude-mem/state/harness-review-evidence.md`,
-which stays local. An earlier version shipped a full baseline table and a stack's prohibitions,
-and every reader who was not their author inherited numbers that meant nothing.
+which stays local.
 
 ## When to use
 
@@ -47,6 +46,13 @@ and every reader who was not their author inherited numbers that meant nothing.
 
 **Do not use** for reviewing a single session, debugging one failure, or auditing code quality.
 Every lane here is a comparison across time; one session has no baseline.
+
+**No cursor, no vocabulary file, no series? That is a first run — read `first-run.md` beside this
+file before Step 2 and do what it says.** It holds the work a first run does and no later run
+repeats: the pass over the whole store through `session_summaries`, deriving the vocabulary file
+from this user's own prompts, and building the baseline every later number is compared against.
+A first run that skips it reports counts with nothing to compare them to and hands the next run a
+backlog nobody recorded.
 
 **Works without any corrective prompts at all.** If the user only assigns tasks and never
 corrects — an autonomous run, a fresh setup — Steps 1–3 return near zero and Step 4 carries the
@@ -63,7 +69,7 @@ discipline rather than reinventing it.
 `~/.claude-mem/state/harness-ledger.md` holds every shipped harness change alongside the
 number it predicted would move. **Read it before anything else, and report open rows before
 any other number.** A review that finds new things without checking whether the last fix
-worked is the exact failure this skill exists to prevent — thirty retrospectives did that.
+worked is the exact failure this skill exists to prevent.
 
 Score each open row: `moved` / `not moved` / `verified` / `unexposed` / `regressed` /
 `inconclusive` / `needs its own pass`.
@@ -81,11 +87,10 @@ proposals are already one-liners; leave them alone.
 
 ### The other half of the ledger: what the user asked for and nobody shipped
 
-**The ledger above tracks fixes that shipped. Nothing tracks fixes the user proposed.** That
-asymmetry is not neutral: a harness problem the owner identified out loud, which then dropped
-because the conversation moved on, is invisible to every lane in this file. It produced no
-error, no correction, no re-derived fact — the work never happened, so there is nothing to
-measure. The only record it ever had was one sentence, in one session, months ago.
+**The ledger above tracks fixes that shipped. Nothing tracks fixes the user proposed.** A
+harness problem the owner identified out loud, which then dropped because the conversation moved
+on, is invisible to every lane in this file: it produced no error, no correction, no re-derived
+fact — the work never happened, so there is nothing to measure.
 
 Keep them in `~/.claude-mem/state/harness-open-loops.md`, one row each: the prompt id and date,
 what was asked for in one line, and a status — `open` / `shipped` / `declined`. Populate it from
@@ -100,7 +105,7 @@ want.
 - **Carry the age.** A loop still open at its third run is itself a finding, and not a
   scheduling one: it means the mechanism loses what the owner already found, which is worse
   than any single defect it might have fixed.
-- Do not re-litigate a `declined` row. Record the date it was declined and stop showing it.
+- A `declined` row keeps the date it was declined and stops being shown.
 - **A shipped loop is a ledger row, not a loop.** On `shipped`, move it to the ledger and remove
   it from this file; keeping it in both is duplication that every later run reads. `declined`
   collapses to one line carrying its date. `open` and `agreed` are the only states that occupy
@@ -139,8 +144,7 @@ signal.
 
 **If they differ by more than a day: report that as the finding and stop.** Every number below
 would describe a store that is no longer being written, and a total row count looks identical
-whether the store is healthy or dead — three baseline runs each read the row count, each said
-"~26k observations", and none noticed the store had been silent for three days.
+whether the store is healthy or dead.
 
 Three ways that comparison passes on a dead store. Close all three:
 
@@ -172,21 +176,12 @@ findings that day" and "the generator was down that day" are indistinguishable.
 A timestamp comparison catches a stop but not a **fade**. A store writing a tenth of what it
 should still passes the check above.
 
-**The example this skill used to give for that was wrong, and the way it was wrong is the
-lesson.** It reported observations per prompt collapsing over a few days *while prompt volume
-doubled* — a textbook fade under growing load. Neither half survived the split: the store's
-dominant project was winding down to nothing while a second one started up, and summing the two
-produced exactly the shape of one project degrading.
-
-A genuine, smaller fade was hiding inside the wrong one, in a single project, lined up with
-logged generator failures. Only the per-project split separated them, and the blended number
-would have had you fixing the wrong thing.
-
 **First of the four direct queries** — the daily ratio needs true counts, and `search` caps at
 100 results per call, which silently understates exactly the healthy days:
 
-**Group it by project.** A single blended number is what produced the wrong example above, and
-`search` cannot answer "latest activity per project" in one call, so this query carries the
+**Group it by project.** A blended number reads as one project degrading when a dominant project
+is winding down while another starts up — a fade that is not there, hiding a smaller one that
+is. `search` cannot answer "latest activity per project" in one call, so this query carries the
 split rather than a second one being improvised each run.
 
 ```bash
@@ -210,8 +205,8 @@ absolute number is healthy or unhealthy. Two rules, so that two runs reach the s
 instead of two impressions:
 
 - **Falling on three or more consecutive active days → report it as a finding**, and mark every
-  observation-side count for the period *understated*. Do not repair the denominators
-  afterwards; say they are unreliable and move on.
+  observation-side count for the period *understated*. Say the denominators are unreliable and
+  move on.
 - **Days with fewer than five prompts are idle, not sick.** Exclude them rather than counting
   them as a dip.
 
@@ -250,10 +245,9 @@ it held is two numbers that already live in the cursor.
 **Then check the seam.** The first id of this window must be `last_prompt_id + 1`. A gap means
 the cursor moved further than the last run actually
 read, and those prompts will never be looked at by anything: the next run starts from the
-cursor, not from what was covered. There is a guard for the opposite failure — a live store
-returning zero prompts — and there was none for this one. `dateStart` is inclusive, so a date-only window recounts whatever sat on the
-boundary, and paging by date while new rows arrive shifts pages underneath you.
-`last_prompt_id` already exists in the cursor file and is currently written but never read.
+cursor, not from what was covered. `dateStart` is inclusive, so a date-only window recounts
+whatever sat on the boundary, and paging by date while new rows arrive shifts pages underneath
+you.
 
 **First, drop what the user did not type.** The prompt table is written by a hook, and on a
 multi-agent setup it also collects machine traffic: subagent reports relayed back to the
@@ -264,8 +258,7 @@ window before anything is labelled, or every rate in this lane is computed over 
 that is partly machine.
 
 Count them and report the number separately: it says how much of the table is not the user, and
-it grows with parallel work — one measured store had it under one percent, another had it at
-fourteen for a single week. **If it is more than a rounding error, the fix belongs in the
+it grows with parallel work. **If it is more than a rounding error, the fix belongs in the
 capture hook, not in this skill** — a review that quietly filters them each run leaves every
 other consumer of that table reading them as the user's words.
 
@@ -289,8 +282,7 @@ also is becomes a tag, not a second primary. A window whose labels do not sum to
 a clean period, it is an invalid instrument, and the period is reported as such.
 
 **`last_run` is UTC.** Writing local time with a `Z` suffix pushes the next window into the
-future, which returns zero prompts and reports a clean period. A cursor file has already been
-wrong this way.
+future, which returns zero prompts and reports a clean period.
 
 **Guard: if Step 1 said the store is live and this window returns zero prompts, that is a
 contradiction, not a clean period.** Suspect the cursor and stop.
@@ -315,22 +307,6 @@ But the store is not a *reliable* archive either: the generator can fail against
 whole day, and a run on such a day leaves nothing behind. Hence the rule both halves point at —
 **every surviving line carries its own number inline; a pointer to the store is a convenience,
 never the mechanism.** A `runs/` or `archive/` directory was proposed and rejected.
-
-**On the first run the cursor does not exist, and a first run covers the whole store.** Start
-the prompt window wherever your own baseline recount ended and read forward — but the prompts
-are not the store. Everything before that window is history no lane has ever classified, and a
-first run that leaves it unread hands the next run a backlog nobody recorded.
-
-Read that history through `session_summaries`, not through prompts. One summary row is a
-compact record of a session — what was asked, what was investigated, what was learned, what was
-completed, what came next — and it exists for sessions that produced no spec, no branch and no
-artefact, which is exactly the work a prompt window misses. Full text for every historical
-prompt is what is unaffordable; the summaries are not. Slice them and fan out: the
-`weekly-digests` skill in this same plugin already implements the shape — split the timeline
-into per-period slices, one subagent per slice, each handed the previous slice's carry-forward.
-**Take that mechanism; do not take its output.** A period-by-period narrative is the deliverable
-this file exists to argue against — the carry-forward here holds open findings and counts, not
-continuity of story.
 
 ### A stored conclusion is a hypothesis, and the run that disproves one retracts it in place
 
@@ -379,7 +355,8 @@ numbers the next run can act on rather than a sentence it has to trust.
 **Three sources sit in the plugin that no lane here reads.** Named because a run that never
 opens them cannot say what it did not look at:
 
-- `session_summaries` — the medium of the first-run pass above, and unread by every other lane.
+- `session_summaries` — the medium of the first-run pass (`first-run.md`), unread by every other
+  lane.
 - `session_start_context` — renders exactly what the SessionStart hook injects for a project.
   It is the only way to see which memory actually reaches a context, as opposed to which memory
   exists. Use it when a Lane B cluster claims a fact was re-derived that the store already held.
@@ -462,9 +439,8 @@ right* — that is the claim-challenge below, and its answer lives in the agent'
 *is this thing worth having*: does that skill do anything, why is this hook still here, is this
 rule earning its injection. They arrive one at a time, each individually minor, and each scores as
 the lowest severity there is. **Report rule: enumerate every tagged id and name the component each
-one is about; never fold them into a severity count.** On one measured run, eight prompts doubting
-a single component across two sessions were all counted at the lowest severity and none reached
-the report — the aggregate was the finding, and the severity column is what destroyed it. Carry
+one is about; never fold them into a severity count.** The aggregate — several prompts doubting
+one component across a period — is the finding, and a severity column destroys it. Carry
 the tag in the vocabulary file so the next run applies it without rediscovering it.
 
 **Sample the neutral bucket, every run, not only when building a baseline.** Everything labelled
@@ -473,9 +449,8 @@ silently — no sum fails, no guard fires. Once the window is labelled, take thi
 neutral rows by a fixed rule (every Nth, so the choice is not yours) and relabel them cold.
 Report the miss rate next to the correction rate — **including when it is zero**. A clean sample
 is a real result about the instrument, and it is exactly the kind of boring number a run drops
-for lack of anything to say about it. Measured once on a large recount, the neutral
-bucket held enough missed corrections to move the headline by more than any fix ever has, and
-nothing in the ordinary run would have surfaced it.
+for lack of anything to say about it. The misses hiding there have moved a headline further than
+any shipped fix, and nothing else in an ordinary run surfaces them.
 
 **Classify by reading, not by keyword matching.** A baseline run that searched for correction
 words missed an entire category, because the word its owner actually used was not on the list.
@@ -487,38 +462,19 @@ the doubt was founded lives in the agent's answer**, and the answer often names 
 the user had not seen, or turns out to be about a different file, or shows the user's own
 environment was confused. Find the session transcript, read the assistant turn that follows,
 and score from that. If the transcript cannot be found, leave the row **unscored** and say so —
-do not fall back to the prompt alone.
-
-This is procedure, not judgement, and it is the single largest labelling defect measured so far:
-on one run, five of the period's correction rows were withdrawn once the replies were read, and
-four of those five were claim-challenges. The labelling agent had flagged one of them as
-inference; the lead confirmed it anyway without opening the transcript.
+do not fall back to the prompt alone. This is procedure, not judgement, and it is the largest
+labelling defect measured so far: correction rows withdraw in numbers once the replies are read,
+and most of the withdrawals are claim-challenges.
 
 **Separate three things that arrive in the same shape**, or a design-heavy period reads as a
 harness collapse: the user correcting the **agent**; the user revising an **artefact** the agent
 is drafting for them; the user reasoning about the **system under study**. All three sound like
 "no, X, not Y". Only the first is a harness failure.
 
-**A category is a claim about what the user meant, and the user is available to ask.** One
-question has settled a category that two rounds of arithmetic could not — and the answer was
-that the largest category in the dataset was measuring nothing the owner cared about. Ask before
-building a rate on top of a category, not after.
-
 **The wordings and the category list live outside this file**, in
 `~/.claude-mem/state/harness-review-vocab.md` — they are one person's prompts, and this skill is
 meant to be shared. Read it before classifying; any closed list in it is closed, and a run that
 widens one has changed the instrument and must say so.
-
-**A worked first run is in `first-run-example.md`, beside this file** — invented person,
-invented numbers, categories deliberately unlike anyone's real ones. Read it for the shape of
-the thing, never for its content: a run whose derived categories resemble that file's has copied
-rather than read.
-
-**If that file does not exist, this is a first run for this user — build it.** Read the window,
-derive the categories by the fix test above, and collect the phrasings this user actually
-reaches for. Write the file: categories with one-sentence definitions, any closed lists, the
-priority order, `Version: v1`. Say in the report that this run built the vocabulary rather than
-applying one, so its counts are the first point of a series and not a comparison.
 
 **Things that are not prompts cannot be counted from this lane.** An interrupt, a cancelled
 call, a session abandoned mid-task — these are harness events, and they leave no row here.
@@ -539,10 +495,6 @@ previous ones in the series:
   is a rule that exists in the user's head and nowhere else. Each instance looks like an
   ordinary instruction; only the repetition makes it a finding, and no single window shows it —
   this is the one question that requires looking across windows rather than within one.
-- **What preamble is now attached to every request?** A standing "and don't forget X" is not
-  diligence, it is a defect being carried by the user. It also silently removes the correction
-  that would have named it, which is why a falling rate can mean the opposite of what it looks
-  like.
 - **Where in the work do the corrections cluster?** If they concentrate in one phase — planning,
   review, hand-off — the defect belongs to that phase, and a rule scoped to it beats a general
   one about care.
@@ -678,8 +630,7 @@ the harness. Report the counts side by side and say which rows make them untrust
 **The test: a false positive is a prompt whose existence is explained by something other than
 the agent's behaviour.** Typing habits, the transport, several agents addressed at once,
 infrastructure output pasted in. It reads exactly like a correction to anything short of
-reading it, and on one measured store this class was large enough to double a correction rate
-by itself.
+reading it, and the class is large enough to double a correction rate by itself.
 
 **Which classes you have depends on how you work, so derive them and write them down.** Read a
 window with this question only: *would this prompt exist if the agent had behaved perfectly?* If
@@ -693,21 +644,19 @@ a session id, timestamps with seconds. A run that could apply three of its four 
 comparable with a run that applied four, and must say so rather than quietly reporting a lower
 number.
 
-**Ask before you subtract a whole category.** This skill spent two versions computing how much
-of its largest category to discount, and settled on an elaborate defensible floor. One question
-to the owner replaced all of it and gave a different answer: that category was not measuring
-anything he experienced as failure. **A correction category is a claim about what the user
+**Ask before you subtract a whole category. A correction category is a claim about what the user
 meant, and the user is available to ask** — cheaper than any amount of arithmetic, and the only
-method that can tell you a number is measuring nothing.
+method that can tell you a category is measuring nothing its owner experiences as failure. Two
+versions of this skill computed an elaborate defensible discount where one question settled it
+differently.
 
 ## Step 4 — the lanes where nobody complains
 
 **The prompt lane has a ceiling, and it is lower than it looks.** A prompt exists only when a
 failure annoyed the user enough to type about it. Everything the agent wastes silently —
 re-deriving the same fact for the ninth time, working around the same blocked path for two
-months — costs tokens and time and produces no prompt at all. Worse, the lane degrades on its
-own: once the user learns the agent drops items they write "and don't forget X" in advance, the
-complaint disappears and the defect does not.
+months — costs tokens and time and produces no prompt at all. Worse, pre-emption degrades the
+lane on its own, which is what the pre-emptive-instruction tag in Step 2 exists to catch.
 
 So the prompt lane cannot be the whole review, and a falling correction rate means nothing
 until a lane below agrees with it. **These lanes read what the agent did, not what the user
@@ -771,18 +720,15 @@ FROM cl ORDER BY sessions*1.0/exposure DESC LIMIT 25;"
 `exposure` counts the project's sessions between the cluster's first and last occurrence, taken
 from `observations` — every session, not only the ones whose titles survived the filter above.
 **It is still not every session the project had.** A session the generator never wrote for is
-invisible here, so an outage inflates every share. Widening the denominator this way moved the
-top shares only slightly on a healthy store, but the gap grows exactly when Step 1 reports a
-fade — read the two together. `sdk_sessions` looks like the right source and is not:
-on a measured store it held a fraction of the sessions `observations` knows for the same
-project, so shares computed against it exceeded 100%. Check that before trusting it.
+invisible here, so an outage inflates every share, and the gap grows exactly when Step 1 reports
+a fade — read the two together. `sdk_sessions` looks like the right source and is not: it can
+hold a fraction of the sessions `observations` knows for the same project, which puts shares
+computed against it above 100%. Check that before trusting it.
 
 The share and `sessions/exposure` is the only honest reading of how often the fact was
 re-derived. Three sessions out of five and three out of five hundred are the same number in the
-`sessions` column and nothing alike in reality. Measured on one store: the cluster with the
-highest raw count ran in a low single-digit percentage of the project's sessions, while a
-cluster a third its size ran in several times that share — ranking by count put them in the
-wrong order.
+`sessions` column and nothing alike in reality — ranking by raw count puts the smaller, denser
+cluster below the bigger, sparser one.
 
 **The share is not a gate — but `HAVING` and `LIMIT` are, and pretending otherwise is a lie
 this file told.** Nothing is dropped *for being rare in share terms*: rarity decides where the
@@ -792,10 +738,12 @@ what the cutoffs were.
 
 For the watchlist, drop the threshold by one step and keep the extra rows in the decisions file
 rather than the report — otherwise "sub-threshold clusters worth watching" asks you to record
-clusters the query never returned. **Check the size before committing to this**: one step down
-can multiply the list several times over, and a decisions file that grows by hundreds of rows a
-run is one nobody reads. If that is what happens, record only the sub-threshold clusters that
-grew since the last run.
+clusters the query never returned. They earn their place because a fact sitting just under the
+threshold is invisible until it silently becomes news, and the growth is the thing worth
+reacting to. **Check the size before committing to this**: one step down can multiply the list
+several times over, and a decisions file that grows by hundreds of rows a run is one nobody
+reads. If that is what happens, record only the sub-threshold clusters that grew since the last
+run.
 
 **What the share decides is where the fact goes, not whether it is worth writing.** Places cost
 differently: a line in `CLAUDE.md` is paid on every session for ever, a comment at the point in
@@ -854,10 +802,6 @@ re-proposes what the owner already declined, and the assumption that a bad propo
 caught next time is false: the next run has no idea a judgement was ever made. Re-raise a
 declined cluster only if its share has grown materially, and say by how much.
 
-Sub-threshold clusters worth watching go in the same file. Otherwise a fact sitting at two
-sessions is invisible until it silently becomes news, and the growth — the thing worth
-reacting to — is never seen.
-
 **A cluster needs a way to stop being reported, or this lane only ever grows.** Lanes B and C
 are cumulative and each cluster's span is declared to be the finding, so nothing ever leaves:
 a failure that stopped months ago prints in every run carrying its old span, indistinguishable
@@ -875,10 +819,10 @@ as it needs to say "this recurs". Two guards, because both failure modes are eas
   than the cluster's own row count.
 
 **This file is on probation, and the condition belongs inside it.** Exact-title matching is too
-crude to cluster the same discovery worded two ways, and a measured run returned no stable
-cluster at all — everything above threshold was session-bootstrap and build-outcome noise. Write
-the condition into the file's own header: if a run again returns no stable cluster, delete the
-file and say so in the report.
+crude to cluster the same discovery worded two ways, and a run can return no stable cluster at
+all — only bootstrap and build-outcome noise above the threshold. Write the condition into the
+file's own header: if a run again returns no stable cluster, delete the file and say so in the
+report.
 
 Output per live cluster: title, project, times / sessions / exposure / days / span, and a
 mechanical proposal naming the exact file to write the fact into.
@@ -886,15 +830,13 @@ mechanical proposal naming the exact file to write the fact into.
 **Set the thresholds against your own store, and record what you set.** Run the query at two or
 three settings, count the clusters each returns, and pick the loosest one whose table a person
 will actually read to the end. Write both the setting and the count into the series file, so a
-later run knows whether a shorter list means less re-derivation or a tighter threshold. Measured
-on one store, moving from three sessions and three days to two and two multiplied the list
-roughly sevenfold — the setting is not a detail.
+later run knows whether a shorter list means less re-derivation or a tighter threshold. One step
+of loosening can multiply the list several times over: the setting is not a detail.
 
 ### Lane C — errors the agent worked around instead of reporting
 
 The failure mode this lane exists for: the agent hits the same wall for two months, silently
-routes around it every time, and never once says so. One measured case ended with the agent
-disabling the sandbox entirely rather than mentioning the blocked path.
+routes around it every time, and never once says so.
 
 **What this lane actually measures, so the name does not oversell it:** a tool call the runtime
 marked as failed whose text matched a signature. It does not establish that the agent then
@@ -956,34 +898,32 @@ GROUP BY s.name ORDER BY hits DESC;"
 
 **Drop the rows this review wrote itself — in both sources.** Running this lane produces
 observations that quote the error strings it searches for, and, worse, reading this file or a
-previous review inside a session puts those same strings into that session's transcript. During
-one review the Codex match count doubled without a single new failure occurring, purely from
-reading review material. Exclude the sessions in which a review ran, by id, before reading
-either table; on the first run of this lane the top row by date was its own query.
+previous review inside a session puts those same strings into that session's transcript — a
+match count can double with no new failure behind it. Exclude the sessions in which a review
+ran, by id, before reading either table.
 
-**Group the whole tail, do not only match signatures.** A hand-maintained list cannot converge
-on the shape of this data: on one measured run the list matched about a quarter of the failures,
-and grouping every failed call by normalised text produced hundreds of distinct shapes. Run
-`--raw`, normalise (strip paths, digits, ids, whitespace), group, and sort by sessions × days.
-**The tail is where the useful findings are** — on that run, both of the lane's best results came
-from it and neither would ever have appeared in the signature table. The signature list is for
-tracking known classes over time; the grouping is for finding the next one.
+**Group the whole tail, do not only match signatures.** A hand-maintained list cannot converge on
+the shape of this data — it matches a minority of the failures, while grouping every failed call
+by normalised text yields far more distinct shapes than any list holds. Run `--raw`, normalise
+(strip paths, digits, ids, whitespace), group, and sort by sessions × days. **The tail is where
+the useful findings are**, and they never appear in the signature table. The signature list
+tracks known classes over time; the grouping finds the next one.
 
 **The signature list is a seed, not a vocabulary** — the same trap as classifying prompts by
 keyword. Read the period's `failed_attempt` observations and add the signatures this
 environment actually produces, in the run itself; the list lives in this file and in the query
-above, not in a state file of its own. **Version the method, not the list.** A hand-maintained
-list was tried as the instrument and could not converge — the thing that stays comparable
-between runs is how the tail was grouped (what was normalised away, what the ranking key was),
-so record a Lane C method version in the series row and say which version produced a count.
+above, not in a state file of its own. **Version the method, not the list.** What stays
+comparable between runs is how the tail was grouped (what was normalised away, what the ranking
+key was), so record a Lane C method version in the series row and say which version produced a
+count.
 Widening the seed list changes nothing about comparability as long as the grouping is unchanged;
 changing the grouping does, and that is what the version is for.
 
-**A span that ends is the most valuable row in this table.** One measured signature recurred
-across many sessions and then stopped on a specific day — the day the workaround was written
-into the instructions file. That is a harness fix proving itself without anyone having predicted
-it, and it is exactly what a ledger row wants as evidence. A span that reaches today is the
-opposite: the same obstruction, still there, still routed around, with no prompt about it.
+**A span that ends is the most valuable row in this table.** A signature that recurs across many
+sessions and then stops on the day a workaround was written into the instructions file is a
+harness fix proving itself without anyone having predicted it, which is exactly what a ledger row
+wants as evidence. A span that reaches today is the opposite: the same obstruction, still there,
+still routed around, with no prompt about it.
 
 **The script's table cannot satisfy the citation contract on its own.** A row reading "path
 guessed wrong" with a count names no path, and the output contract requires rows. Before proposing anything from this
@@ -1089,13 +1029,12 @@ alive and is being absorbed by the brief instead of being fixed.
 
 ### The registry check — beside Lane E, and not Lane E
 
-**Leave the stub above exactly as it stands.** This is a separate, much smaller check, and it
-does not turn into the outcome lane however much it grows. Lane E asks how a task ended —
-accepted, sent back, redone, abandoned. This asks one mechanical question: **does a `DONE`
-marker mean the work reached the default branch.** Labelling it Lane E would let the next run
-read "the outcome lane exists" and stop looking for the real one, which is the favourable
-silence this file exists to prevent. Keep the five-lane enumeration in the output contract as
-it is; this check reports on its own line.
+**Leave the stub above exactly as it stands, and keep the five-lane enumeration in the output
+contract as it is; this check reports on its own line.** Lane E asks how a task ended — accepted,
+sent back, redone, abandoned. This asks one mechanical question: **does a `DONE` marker mean the
+work reached the default branch.** Labelling it Lane E would let the next run read "the outcome
+lane exists" and stop looking for the real one, which is the favourable silence this file exists
+to prevent.
 
 **Run it where the pipeline keeps durable progress files** — a spec or run directory whose files
 declare a status per task, and gate logs carrying a pass/fail verdict. Both are greppable and
@@ -1142,9 +1081,8 @@ merely occurred near one.
 - **Nothing active in any lane and the correction rate fell** → the strongest reading available,
   and still not proof: the pre-emption effect is invisible to every lane here.
 
-The first case is not hypothetical: a permission-denial signature has been measured recurring
-for months across many sessions with no prompt ever complaining about it — while the correction
-rate over the same period looked fine.
+The first case is the common one: a permission denial recurring for months across many sessions,
+no prompt ever complaining about it, and a correction rate over the same period that looks fine.
 
 ## A sweep is one pass of two, and the first pass produces candidates
 
@@ -1204,9 +1142,8 @@ checkpoints in seconds, or one conversation lasting half an hour.
   report the count.
 - **`type` is unreliable inside a burst.** Rows written in quick succession inherit one type,
   including rows whose subject plainly is not that type. Do not build a count on `type` alone.
-- **A claim about the store's own behaviour is a hypothesis, not evidence.** It is a generator's
-  conclusion about the thing that wrote it. Re-check it against the store before citing it —
-  schema, counts and queries are cheap to re-run.
+- **A claim about the store's own behaviour is a hypothesis** — a generator's conclusion about
+  the thing that wrote it. Re-check it, and retract a disproved one in place, per Step 2.
 
 ### git is the reliable second source; transcripts frequently are not
 
@@ -1244,49 +1181,6 @@ subagent files alone are the honest unit.
 **The cost number only bites when paired with the withdrawal rate.** A run that halves
 withdrawals while doubling the cost per surviving finding has not improved, and without both in
 the same row nobody can tell which happened.
-
-## Baseline — build your own, recompute once, then freeze
-
-**A baseline belongs to whoever produced it and travels to nobody.** It records how one person
-works: what they let slide, how they phrase a complaint, how tool-heavy their tasks are. This
-file therefore ships no baseline numbers at all — an earlier version did, and every reader who
-was not that person had a table that looked authoritative and meant nothing. Your first runs
-are your baseline; until you have several, the honest report is "establishing a baseline", not
-"the rate moved". Keep the table in
-`~/.claude-mem/state/harness-review-series.md`, beside the series.
-
-Recompute **once**, against a written rubric, keeping the prompt ids behind every count;
-publish it with a ledger row; then freeze it. Freezing an unverified number does not make it
-true, it makes the error canonical — and a number no one can trace to rows cannot be checked
-later by anyone, including you.
-
-**A recompute by one labeller is not a baseline, and the check that matters is on the boring
-bucket.** Measured on two independent passes: agreement on the *corrections* was high and every
-disagreement was one step of severity — reassuring, and not where the error was. The error was
-in the neutral bucket, where a blind sample found corrections the first pass had missed, and
-found them unevenly across weeks. That distorts the shape of the series, which is the only
-thing a series is read for. So before freezing: have a second labeller relabel the neutral
-bucket blind, writing its labels before it opens the first pass's file. If the miss rate is
-material, re-pass the whole bucket — an extrapolation from a small sample is not a baseline
-either, and the full pass has been measured landing far from what the sample predicted.
-
-**Separate three things the word "correction" runs together**, or a design-heavy period will
-read as a harness collapse:
-
-- the user correcting the **agent** — the harness failed;
-- the user revising an **artefact** the agent is drafting for them — ordinary iteration;
-- the user reasoning about the **system under study** — not about the agent at all.
-
-All three arrive in the same shape ("no, X, not Y"), and in review-heavy sessions the second
-kind dominates. Deciding which is which is a claim about what the user meant, so ask them
-rather than infer — one question has already settled a category that two rounds of arithmetic
-could not.
-
-**Check severity calibration on identical prompts before concluding a period was severe.** Two
-passes reporting very different `S1` counts look like different bars and need not be: handed
-the same prompts, both may agree exactly, and the difference then lives in the periods, not the
-labellers. Without that check the obvious reading — "the later labeller is stricter" — can be
-wrong in the direction that suppresses real incidents.
 
 ## Output contract
 
@@ -1363,17 +1257,16 @@ produced it**, by row: prompt ids, observation ids, or log lines.
   enforces them and nothing verifies they happened.
 - **Grep the instruction files before proposing anything, every time.** A proposal to write down
   a rule that is already written is a no-op that closes a serious finding: the rule exists and
-  is not being followed, which needs enforcement, not restatement. Measured on one run, a
-  quarter of the proposed groups restated rules already in force. This is a precondition on
-  every proposal, not a step belonging to one lane.
+  is not being followed, which needs enforcement, not restatement. Restating a rule already in
+  force is the single commonest defect in a proposal set, so this is a precondition on every
+  proposal, not a step belonging to one lane.
 - Nothing mechanical found → report **"no new fixable failures this period"**. Do not invent
   one. A clean period is a legitimate result and the whole point of counting.
 
 **Rank by consequence, with the count as a second column.** The obvious ordering — how many rows
 a proposal would close — puts the cheapest, most frequent friction on top and buries the group
-that took something down. On one measured run the deploy-packaging group sat near the bottom by
-row count and owned four of the five S1 rows. Sort by the worst outcome in the group; break ties
-by rows closed.
+that took something down, which typically sits near the bottom by row count while owning most of
+the S1 rows. Sort by the worst outcome in the group; break ties by rows closed.
 
 **Split the proposals by whether they need you.** Reversible, narrowly scoped, and verifiable
 inside this run — a config line, an allowlist entry, a tool install — **the run applies itself**,
@@ -1508,4 +1401,4 @@ Each was observed in baseline runs of this exact task, three of three agents unl
 | Reading a re-derivation cluster as waste without checking the type | Half the list is branch SHAs and task status, which *should* be re-derived every session. Proposing to write those down produces instructions that rot within a day. |
 | Proposing "document this" without grepping the docs first | If the fact is already in `CLAUDE.md` and was still re-derived nine times, the defect is in what gets read, and the proposal as written would close a serious finding with a no-op. |
 | Trusting an instruction in this file over what the tool actually returns | Every defect in the row below shipped inside this skill and survived two GREEN runs. Check the instrument, then the data, then the claim. |
-| Reporting a clean period without saying which lanes were degraded | v2.0.0's liveness call was rejected by the API on every invocation; the classification step reads 60-character truncations; two of four false-positive rules cannot be computed at all. A report that hides this reads exactly like a healthy one. |
+| Reporting a clean period without saying which lanes were degraded | A rejected liveness call, a classification step reading truncations, false-positive rules that cannot be computed — a report that hides any of it reads exactly like a healthy one. |
