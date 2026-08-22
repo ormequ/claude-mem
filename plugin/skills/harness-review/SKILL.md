@@ -332,6 +332,44 @@ into per-period slices, one subagent per slice, each handed the previous slice's
 this file exists to argue against — the carry-forward here holds open findings and counts, not
 continuity of story.
 
+### A stored conclusion is a hypothesis, and the run that disproves one retracts it in place
+
+**A stored claim about the store's or the harness's own behaviour is a hypothesis, not
+evidence — re-check it against the store before citing it.** The summaries this pass mines were
+written by sessions that were frequently mid-way through changing the very thing they describe,
+so a claim that was true the morning it was written can be false by the time a review quotes it
+back — now with a second timestamp on it, which reads as confirmation rather than as a copy.
+
+**Narrow on purpose.** Schema, counts, queries and generator behaviour are cheap to re-run, and
+those are the claims this covers. What a session was trying to do, or why, cannot be re-checked
+at any sensible cost: that is testimony, cite it as testimony.
+
+**A claim the check disproves is retracted in place, by the run that disproved it.** The run
+holding the disproof is the only one that will ever hold it, and a finding filed only in a report
+leaves the wrong text sitting in the store, still reading as knowledge. Nothing in the store will
+catch it later: there is no contradiction check and no expiry, so this review is the detector —
+over everything on a first run, and over its window on every run after, which means anything
+outside a later window keeps whatever it claimed.
+
+The format is required, not advice:
+
+- **Marker first, at the head of the field.** Search truncates, and a leading marker is the only
+  form that survives into a listing — a retraction further down is invisible to exactly the reads
+  that would otherwise re-cite the claim.
+- **The marker names what disproved it: the commit, the query, or the file.** Without that, the
+  next run cannot tell a verified retraction from someone's opinion, and pays to re-check the
+  whole thing from scratch.
+- **The original text stays verbatim below the marker**, never rewritten and never deleted. The
+  claim and the reason it was wrong have to be readable together; an edited field destroys the
+  evidence that the claim was ever made, which is the part a later run needs to see.
+- **Name what is being retracted when the field holds more than one claim**, and leave the rest
+  alone. A blanket marker over a mixed field discards claims nobody disproved.
+- **The report cites the retraction as a finding**, with the same citation as any other.
+
+**This format lives here rather than in a state file.** There may be no edit path for the record
+being corrected — a retraction can be hand-written SQL against the store — and a format that
+lives beside one run's notes is a format the next run does not have.
+
 **Any boundary carries its reason in the cursor, written by the run that set it.** Not a note
 added afterwards, and never a reason reconstructed later from the choice itself: an
 after-the-fact justification cannot be told apart from a rationalisation, by the next run or by
