@@ -1315,10 +1315,39 @@ read and the shape was absent, silence says nothing at all. Same rule as the lan
 
 **Report what improved, held to the same evidence standard as everything else.** A report made
 only of failures describes a harness that has never once got better, and the owner cannot tell a
-period where the fixes held from a period where nobody checked. Three sources, all already
+period where the fixes held from a period where nobody checked. Sources, all already
 computed by this run: ledger rows scored `verified`, error signatures whose span ended — a fix
 proving itself — and any count whose share fell against the previous series row. A line here
 carries its own number like every other line, or it is a mood.
+
+**One more source, and it records the opposite thing: a practice that worked and is worth
+keeping.** Everything above is pain that stopped, and so is the question put to the owner about
+what he did not have to say this period. A method that did work shows up in none of them — it
+leaves no failed rows to fall and no error span to end — so without this source the report can
+only ever say the harness hurts less, never that it does something well enough to keep.
+
+**Its job is intake, not applause.** A candidate found here goes to the rule on how a skill gets
+created — proposed by the agent, ruled by the owner, confirmed by a first use that did not have
+to rewrite it — and it does not also become a finding of its own. Two lists of the same
+candidates drift apart within a run or two, and the one that is only a report line is the one
+nobody acts on.
+
+**The bar is that rule's bar, and it is not optional here**, because this is the easiest line in
+the whole report to fill with self-congratulation: every other lane counts artefacts, this one
+risks counting impressions. Both halves have to hold:
+
+- **It can be written as steps that work with its author out of the loop.** A judgement made in
+  flight is not a procedure — written down it comes out as a retelling of intent, and it will not
+  fire for anyone else.
+- **It is visible in something the agent did not author** — a commit, an error span that ended, a
+  prompt from the owner. "The run went well" is the agent grading its own work, and it does not
+  qualify however well it reads.
+
+**Nothing in the practitioner corpus does this, and a later run should not go hunting for a
+precedent.** Harvesting a successful procedure is missing from the systems that have been looked
+at, retiring one is rarer, and a lane whose subject is what worked rather than what failed is
+rarer still. This is invention, not catching up — which is exactly why it carries the same
+evidence standard as every other line here: nothing outside this file validates it.
 
 Every proposal must be **mechanical** — a hook, a prohibition, a config field, a settings
 entry, a schema change, an edit to a prompt file — and must **cite the specific evidence that
