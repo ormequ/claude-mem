@@ -1478,6 +1478,18 @@ that can:
 - **It costs a whole run**, and that is the price of the only honest answer available here. A
   candidate waits its turn, and a run carrying an ablation says so in its report, because every
   number it produces was measured under a different rule set than the run before it.
+- **A returning failure class reopens the rule, and the reopening is a finding** — the mirror of
+  the cluster rule's own return, and load-bearing rather than tidy. Removal rests on a single
+  run, so a class coming back is the only evidence that run was read wrong, and without this half
+  retirement is one-directional: nothing catches a rule removed for the wrong reason. Report it
+  rather than quietly restoring the rule, or the file re-grows with no record of why anything left
+  it or came back. **The ablation that authorised the removal is retired along with it** — it is
+  now known to have been misread, and it does not count as evidence for removing that same rule
+  again, or the rule gets ablated away run after run on a result already shown to be misleading.
+  **The restored rule carries the round trip in its own text**: removed, class returned, restored.
+  A rule with no history cannot be told apart by the next run from one that was never questioned,
+  which is the retraction format's reasoning applied to a rule — the record and the reason it
+  moved stay together.
 
 ## Common mistakes
 
