@@ -71,8 +71,8 @@ number it predicted would move. **Read it before anything else, and report open 
 any other number.** A review that finds new things without checking whether the last fix
 worked is the exact failure this skill exists to prevent.
 
-Score each open row: `moved` / `not moved` / `verified` / `unexposed` / `regressed` /
-`inconclusive` / `needs its own pass`.
+Score each open row: `moved` / `not moved` / `verified` / `shipped, unproven` / `unexposed` /
+`regressed` / `inconclusive` / `needs its own pass`.
 
 **Collapse a row once it has proven itself.** A row scored `verified` whose signature has not
 returned for two consecutive runs has done its work; its remaining value is one sentence — do not
@@ -120,6 +120,12 @@ exists to prevent.
 
 - `verified` is for deterministic fixes. Not every fix moves a number; some just correct code,
   and forcing them to carry a longitudinal metric manufactures a fake one.
+- `shipped, unproven` is for a change that shipped carrying no number to move — a new skill,
+  agent or script. `verified` is the only status that would otherwise fit and it means the wrong
+  thing: a deterministic fix checked by hand. Scoring a thing that has never been used as
+  `verified` reads as evidence it worked, and that inverts the row — "we built a skill" where the
+  honest line is "shipped and still violated". The row settles on a first use that did not have
+  to rewrite it; until then it stays open and says so.
 - `unexposed` means the mechanism never had an opportunity to fire. **Never record that as
   `not moved`** — a rule that was never triggered has not failed.
 - A due condition that is a date alone is under-specified. An outage silently eats the sample
@@ -1219,6 +1225,16 @@ keeping.** Everything above is pain that stopped, and so is the question put to 
 what he did not have to say this period. A method that did work shows up in none of them — it
 leaves no failed rows to fall and no error span to end — so without this source the report can
 only ever say the harness hurts less, never that it does something well enough to keep.
+
+**Read it out of the harness's own history of itself.** Where the harness is under version
+control, its log over the window is the candidate list: what was created or rewritten there —
+a skill, an agent, a hook, a script, a rule added to an instruction file — is exactly the set of
+things that got built and then went quiet. Where it is not — parts of a harness are routinely
+untracked, and untracked is where new pieces tend to land first — sweep for modification instead:
+files under the harness directories whose mtime falls in the window, read against
+`files_modified` on the window's observations, which says which of those the agent itself wrote
+and in which session. Both routes end at the same list, and every lane above would have missed it
+precisely because none of it failed.
 
 **Its job is intake, not applause.** A candidate found here goes to the rule on how a skill gets
 created — proposed by the agent, ruled by the owner, confirmed by a first use that did not have
