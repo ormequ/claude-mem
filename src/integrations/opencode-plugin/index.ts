@@ -10,11 +10,19 @@ import { SettingsDefaultsManager } from "../../shared/SettingsDefaultsManager.js
  * to are (authoritative source: plans/08-opencode-integration.md "Fix sequence"
  * step 1, cross-checked against OpenCode's documented plugin API):
  *
+ *   - `tool.execute.before`           (input, output) — carries the tool's args
  *   - `tool.execute.after`            (input, output) — fires after every tool run
- *   - `chat.message`                  ({}, output)    — fires on each chat message
+ *   - `chat.message`                  (input, output) — fires on each USER message only
+ *   - `experimental.text.complete`    (input, output) — the assistant's finished text
  *   - `event`                         ({ event })     — generic bus; event.type carries the name
  *   - `experimental.chat.system.transform`             — mutates system prompt context before LLM calls
  *   - `experimental.session.compacting`               — fires when a session compacts
+ *
+ * Two shapes in `@opencode-ai/plugin` decide the capture path and are easy to
+ * get wrong: `tool.execute.after`'s output is `{title, output, metadata}` with
+ * no args (they arrive in `tool.execute.before`), and `chat.message`'s output
+ * message is a `UserMessage` — assistant turns never reach it, so the finished
+ * assistant text comes from `experimental.text.complete` instead.
  *
  * The generic `event` hook delivers bus events whose discriminant is
  * `event.type`. The only bus event types claude-mem reacts to are
@@ -38,8 +46,10 @@ type RealOpenCodeEventType = (typeof REAL_OPENCODE_EVENT_TYPES)[number];
 
 /** The hook keys this plugin returns. The contract test asserts these are the real OpenCode hook names. */
 export const REGISTERED_OPENCODE_HOOKS = [
+  "tool.execute.before",
   "tool.execute.after",
   "chat.message",
+  "experimental.text.complete",
   "event",
   "experimental.chat.system.transform",
   "experimental.session.compacting",
@@ -75,6 +85,20 @@ interface ToolExecuteAfterOutput {
     output?: unknown;
     error?: unknown;
   };
+}
+
+interface ToolExecuteBeforeOutput {
+  args?: Record<string, unknown>;
+}
+
+interface TextCompleteInput {
+  sessionID: string;
+  messageID?: string;
+  partID?: string;
+}
+
+interface TextCompleteOutput {
+  text?: string;
 }
 
 interface ChatMessageOutput {
@@ -162,6 +186,14 @@ async function workerGetText(path: string): Promise<string | null> {
 
 const contentSessionIdsByOpenCodeSessionId = new Map<string, string>();
 const initializedSessionIds = new Set<string>();
+// The summary prompt needs the last assistant turn; OpenCode has no hook that
+// carries it, so `chat.message` records it here.
+const lastAssistantMessageBySession = new Map<string, string>();
+// `session.idle` fires repeatedly; only summarize when work happened since the
+// previous summary, otherwise every idle burns an SDK round-trip.
+const sessionsWithUnsummarizedWork = new Set<string>();
+// Tool args only exist in `tool.execute.before`; hold them until `after` fires.
+const toolArgsByCallId = new Map<string, Record<string, unknown>>();
 
 const MAX_SESSION_MAP_ENTRIES = 1000;
 
@@ -172,6 +204,8 @@ function getOrCreateContentSessionId(openCodeSessionId: string): string {
       if (oldestKey !== undefined) {
         contentSessionIdsByOpenCodeSessionId.delete(oldestKey);
         initializedSessionIds.delete(oldestKey);
+        lastAssistantMessageBySession.delete(oldestKey);
+        sessionsWithUnsummarizedWork.delete(oldestKey);
       } else {
         break;
       }
@@ -228,8 +262,13 @@ function truncate(text: string): string {
     : text;
 }
 
-function extractToolInput(output: ToolExecuteAfterOutput): Record<string, unknown> {
-  return output.args || output.state?.input || {};
+function extractToolInput(
+  callID: string,
+  output: ToolExecuteAfterOutput,
+): Record<string, unknown> {
+  const recorded = toolArgsByCallId.get(callID);
+  toolArgsByCallId.delete(callID);
+  return recorded || output.args || output.state?.input || {};
 }
 
 function stringifyToolOutput(value: unknown): string {
@@ -284,6 +323,20 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
   console.log(`[claude-mem] OpenCode plugin loading (project: ${projectName})`);
 
   return {
+    // The args live here and nowhere else; `after` only gets title/output.
+    "tool.execute.before": async (
+      input: ToolExecuteAfterInput,
+      output: ToolExecuteBeforeOutput,
+    ): Promise<void> => {
+      if (!output?.args) return;
+      while (toolArgsByCallId.size >= MAX_SESSION_MAP_ENTRIES) {
+        const oldestKey = toolArgsByCallId.keys().next().value;
+        if (oldestKey === undefined) break;
+        toolArgsByCallId.delete(oldestKey);
+      }
+      toolArgsByCallId.set(input.callID, output.args);
+    },
+
     // Capture every tool execution as an observation. This is the primary
     // capture path (#2419).
     "tool.execute.after": async (
@@ -291,10 +344,11 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       output: ToolExecuteAfterOutput,
     ): Promise<void> => {
       const contentSessionId = ensureSessionInitialized(input.sessionID, projectName);
+      sessionsWithUnsummarizedWork.add(input.sessionID);
       workerPostFireAndForget("/api/sessions/observations", {
         contentSessionId,
         tool_name: input.tool,
-        tool_input: extractToolInput(output),
+        tool_input: extractToolInput(input.callID, output),
         tool_response: truncate(extractToolResponse(output)),
         cwd: ctx.directory,
         platformSource: "opencode",
@@ -302,26 +356,34 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       });
     },
 
-    // Capture user prompts for memory alignment and assistant chat messages as
-    // observations. OpenCode exposes both via the same chat.message hook.
+    // Capture user prompts for memory alignment. OpenCode only ever hands this
+    // hook a UserMessage, so there is no assistant branch to take here.
     "chat.message": async (
-      _input: Record<string, unknown>,
+      input: { sessionID?: string },
       output: ChatMessageOutput,
     ): Promise<void> => {
-      const sessionID = output.message?.sessionID;
+      const sessionID = output.message?.sessionID || input?.sessionID;
       if (!sessionID) return;
 
       const messageText = extractTextParts(output);
       if (!messageText) return;
+      if (output.message?.role && output.message.role !== "user") return;
 
-      if (output.message?.role === "user") {
-        recordUserPrompt(sessionID, projectName, messageText);
-        return;
-      }
+      recordUserPrompt(sessionID, projectName, messageText);
+    },
 
-      if (output.message?.role !== "assistant") return;
+    // The assistant's finished text. This is the only hook that carries it, and
+    // the summary prompt needs it.
+    "experimental.text.complete": async (
+      input: TextCompleteInput,
+      output: TextCompleteOutput,
+    ): Promise<void> => {
+      const messageText = output?.text?.trim();
+      if (!input?.sessionID || !messageText) return;
 
-      const contentSessionId = ensureSessionInitialized(sessionID, projectName);
+      const contentSessionId = ensureSessionInitialized(input.sessionID, projectName);
+      lastAssistantMessageBySession.set(input.sessionID, truncate(messageText));
+      sessionsWithUnsummarizedWork.add(input.sessionID);
       workerPostFireAndForget("/api/sessions/observations", {
         contentSessionId,
         tool_name: "assistant_message",
@@ -351,9 +413,13 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
 
       output.system.push(contextText);
       injectedMemoryContextKeys.add(injectionKey);
-      console.log(
-        `[claude-mem] Injected memory context (project: ${projectName}, chars: ${contextText.length})`,
-      );
+      // ponytail: OpenCode renders plugin stdout into the TUI, so the happy path
+      // stays silent — set CLAUDE_MEM_DEBUG=1 to see injections again.
+      if (process.env.CLAUDE_MEM_DEBUG) {
+        console.log(
+          `[claude-mem] Injected memory context (project: ${projectName}, chars: ${contextText.length})`,
+        );
+      }
     },
 
     // Summarize when a session compacts. This is OpenCode's real compaction
@@ -367,9 +433,10 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       if (contextText && output?.context) {
         output.context.push(contextText);
       }
+      sessionsWithUnsummarizedWork.delete(input.sessionID);
       workerPostFireAndForget("/api/sessions/summarize", {
         contentSessionId,
-        last_assistant_message: "",
+        last_assistant_message: lastAssistantMessageBySession.get(input.sessionID) ?? "",
         platformSource: "opencode",
       });
     },
@@ -383,11 +450,13 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
 
       switch (eventType) {
         case "session.idle": {
-          // Best-effort summarize once a session goes idle.
+          // Best-effort summarize once a session goes idle, but only when
+          // something happened since the last one — idle fires repeatedly.
+          if (!sessionsWithUnsummarizedWork.delete(sessionID)) break;
           const contentSessionId = ensureSessionInitialized(sessionID, projectName);
           workerPostFireAndForget("/api/sessions/summarize", {
             contentSessionId,
-            last_assistant_message: "",
+            last_assistant_message: lastAssistantMessageBySession.get(sessionID) ?? "",
             platformSource: "opencode",
           });
           break;
@@ -395,6 +464,8 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
         case "session.deleted": {
           contentSessionIdsByOpenCodeSessionId.delete(sessionID);
           initializedSessionIds.delete(sessionID);
+          lastAssistantMessageBySession.delete(sessionID);
+          sessionsWithUnsummarizedWork.delete(sessionID);
           injectedMemoryContextKeys.delete(`session:${sessionID}`);
           break;
         }

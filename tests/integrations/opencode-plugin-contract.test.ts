@@ -19,14 +19,18 @@ import {
  * contract regresses.
  */
 
-// The real OpenCode plugin hook names. Anything the plugin returns as a hook
-// key must be in this allowlist; a future typo (e.g. "session.created") fails.
+// The real OpenCode plugin hook names, transcribed from the `Hooks` interface
+// in @opencode-ai/plugin. Anything the plugin returns as a hook key must be in
+// this allowlist; a future typo (e.g. "session.created") fails.
 const REAL_OPENCODE_HOOK_NAMES = new Set<string>([
   "tool.execute.after",
   "chat.message",
+  "chat.params",
   "event",
   "experimental.session.compacting",
   "experimental.chat.system.transform",
+  "experimental.chat.messages.transform",
+  "experimental.text.complete",
   "tool.execute.before",
   "permission.ask",
   "auth",

@@ -2,7 +2,7 @@
 import path from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, cpSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, cpSync, rmSync, statSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
 import {
@@ -134,13 +134,16 @@ export function findBuiltPluginPath(): string | null {
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist', 'opencode-plugin', 'index.js'),
   ];
 
-  for (const candidatePath of possiblePaths) {
-    if (existsSync(candidatePath)) {
-      return candidatePath;
-    }
-  }
+  // FORK: `sync-marketplace` rsyncs with the repo's gitignore excludes, so it
+  // never refreshes the marketplace clone's `dist/`. Taking the first existing
+  // candidate therefore installed a stale bundle after every local `npm run
+  // build`. Pick the newest of the candidates instead.
+  const existing = possiblePaths.filter((candidatePath) => existsSync(candidatePath));
+  if (existing.length === 0) return null;
 
-  return null;
+  return existing.reduce((newest, candidatePath) =>
+    statSync(candidatePath).mtimeMs > statSync(newest).mtimeMs ? candidatePath : newest,
+  );
 }
 
 export function findBundledSkillsPath(): string | null {
