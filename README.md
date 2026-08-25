@@ -165,6 +165,21 @@ Or install from the plugin marketplace inside Claude Code:
 /plugin install claude-mem
 ```
 
+Or let the agent install itself — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
+
+```text
+Install claude-mem for the harness you are running in.
+
+1. Identify your harness. Valid ids: claude-code, opencode, openclaw, windsurf,
+   codex-cli, cursor, copilot-cli, antigravity, goose, roo-code, warp.
+2. Run: npx claude-mem install --ide <your id>
+3. Start the worker: npx claude-mem start
+4. Verify it answers: curl http://127.0.0.1:37701/api/readiness
+5. If this repo has a CLAUDE.md but no AGENTS.md, add `ln -s CLAUDE.md AGENTS.md`
+   so AGENTS.md-reading harnesses (OpenCode among them) get the same instructions.
+6. Report the install path it printed, then tell me to restart the harness.
+```
+
 Restart Claude Code. Context from previous sessions will automatically appear in new sessions.
 
 > **Note:** Claude-Mem is also published on npm, but `npm install -g claude-mem` installs the **SDK/library only** — it does not register the plugin hooks or set up the worker service. Always install via `npx claude-mem install` or the `/plugin` commands above.
