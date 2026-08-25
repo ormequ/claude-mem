@@ -1,6 +1,6 @@
 ---
 name: harness-review
-version: 2.6.2
+version: 2.6.3
 description: Measures whether the harness is getting better, across several lanes - the user's corrective prompts, facts the agent keeps re-deriving, and errors it silently worked around. Use when asked for a harness retrospective, a correction-rate check, "is the harness getting better", "did that fix help", "what keeps going wrong", or a periodic review of how the agent has been failing the user.
 allowed-tools:
   - Bash
@@ -1326,28 +1326,48 @@ exists, and Lane B will not cluster it because the summariser words it different
 Waiting for the user to notice and say "make that a skill" is the same defect this file names
 elsewhere: the harness working only where a human pays attention for it.
 
-**A signature that stopped is the trace such a fact leaves.** It is already computed — the
-`tool-errors.py` spans in Lane C — and the run without `--since` is the one that shows it, since
-a cursor hides exactly the signature that ended before the last review. Per span whose last hit
-falls inside the window and whose right edge is silence:
+**The store already holds the pair, in prose.** A `failed_attempt` and, later in the same
+session, the observation that says what then worked — the flag that was missing, the step that
+had to come first, the syntax the shell would accept. `facts` quotes the commands verbatim
+(`Command: …`, `Shell rejected: …`), so the meaning is extracted already and nothing has to be
+reconstructed from argv. This is the one place in this file where the store beats the
+transcripts: transcripts have every call and no idea which mattered.
 
-1. **Check the tool is still in use in the window.** A signature stops when someone solves it and
-   also when the work simply moved on. `files_read`/`files_modified` or a later matching call
-   separates the two. No later use, no candidate: silence is not a solution.
-2. **Read the session holding the last hit**, and the observations that follow it in that session.
-   What ended the span is in there — the call that finally worked, the flag that was missing, the
-   step that had to come first.
-3. **Write it as the candidate procedure**, in the steps that would reproduce the working call,
-   not as a retelling of how it was found.
+```bash
+sqlite3 ~/.claude-mem/claude-mem.db "
+WITH win(floor) AS (VALUES (strftime('%s','<last run, YYYY-MM-DD>')*1000)),
+fa AS (SELECT memory_session_id s, created_at_epoch t, project, title, facts
+       FROM observations, win
+       WHERE type = 'failed_attempt' AND created_at_epoch > floor
+         AND (facts LIKE '%'||char(96)||'%' OR facts LIKE '%Command%'))
+SELECT fa.project, date(fa.t/1000,'unixepoch','localtime') day,
+       min(o.created_at_epoch), substr(fa.title,1,58) failed,
+       substr(o.title,1,58) resolved, substr(replace(fa.facts,char(10),' '),1,160) evidence
+FROM fa JOIN observations o
+  ON o.memory_session_id = fa.s AND o.created_at_epoch > fa.t
+ AND o.type IN ('bugfix','change','discovery','feature')
+GROUP BY fa.s, fa.t ORDER BY fa.t DESC LIMIT 25;"
+```
 
-Then it goes through the bar above unchanged, and the procedure half of the evidence rule is the
-half that applies: the external system reported the outcome (that is what the span ending *is*),
-and the first reuse must not have to rewrite the steps.
+`min()` with bare columns picks that row's `resolved` — SQLite guarantees this for `min`/`max`
+and for nothing else. **Match the backtick as `char(96)`**, not as an escaped literal: a backtick
+inside a double-quoted shell string opens command substitution, and the failure is silent.
 
-**The ceiling: this finds what stopped failing loudly.** An incantation worked out on the first
-try leaves no span and stays invisible here, and a span that ends because the environment was
-fixed elsewhere reads identically to one ended by a person learning something. Both are read out
-in step 1 and 2 by hand, and the count is candidates found, never "everything worth harvesting".
+Per row: does the resolving observation describe a procedure someone would otherwise work out
+again? If yes, write the candidate as the steps that reproduce the working call, never as a
+retelling of how it was found, and send it through the bar above. The procedure half of the
+evidence rule is the half that applies.
+
+**Then cross-check against the spans**, the same way Lane C plays the script against the store: a
+`tool-errors.py` signature that went silent in the window with no store pair to explain it is a
+resolution the summariser did not write down. Report that count. It is the honest measure of how
+much of this class the query above cannot see.
+
+**Three ceilings, and they are not small.** Only what the summariser chose to record exists here,
+which is the agent judging its own case. A resolution in the same session proves something
+changed after the failure, not that it was the fix. And an incantation that worked on the first
+try produces no `failed_attempt` at all and is invisible to both instruments — the count is
+candidates found, never "everything worth harvesting".
 
 **Nothing in the practitioner corpus does this, and a later run should not go hunting for a
 precedent.** Harvesting a successful procedure is missing from the systems that have been looked
