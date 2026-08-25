@@ -1165,9 +1165,9 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     const providerResult = await p.select<ProviderId>({
       message: 'Which memory provider do you want to use?',
       options: [
-        { value: 'openrouter', label: 'OpenRouter / any OpenAI-compatible endpoint (recommended)' },
+        { value: 'openrouter', label: 'OpenRouter / any OpenAI-compatible endpoint' },
         { value: 'gemini', label: 'Gemini' },
-        { value: 'claude', label: 'Claude Agent SDK (bills your Claude Code subscription on every tool call)' },
+        { value: 'claude', label: 'Claude Agent SDK' },
       ],
       initialValue: initialProvider,
     });

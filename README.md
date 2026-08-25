@@ -190,8 +190,7 @@ asks for your API key** — put it in `~/.claude-mem/settings.json` yourself:
 }
 ```
 
-Memory capture stays idle until that key is present. Choosing the `claude` provider instead
-bills your Claude Code subscription for compression that runs on every tool call.
+Memory capture stays idle until that key is present.
 
 Or let the agent do it — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
 
