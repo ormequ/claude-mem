@@ -40,6 +40,25 @@ numbers, categories deliberately unlike anyone's real ones. Read it for the shap
 never for its content: a run whose derived categories resemble that file's has copied rather than
 read.
 
+## Install the conventions the review depends on
+
+**The unwrapped agent prompt in `SKILL.md` is subtracted on a marker, and the first run is what
+makes that marker exist.** Read the always-loaded rules file — whatever this setup's agents
+actually load on every turn — and check whether it carries an agent-prefix convention: every
+message an agent types into another agent's session opens with a literal prefix. If it does not,
+write that section there, and say in the report that this run installed it.
+
+**Recording it only in the vocabulary file is the failure mode, not the shortcut.** Senders never
+read that file, so no prompt ever carries the marker, and the review filters on something that
+matches nothing — a rate that stays wrong while looking measured. The vocabulary file gets the
+other half: which prefix this store uses and the date the convention starts, because the review
+has to know how far back the marker can be trusted.
+
+**The shape generalises.** Wherever this review depends on the agents behaving a particular way,
+the instruction belongs in the always-loaded rules file and the review's own files hold only how
+to read the result. A rule the review states to itself changes nothing about what gets written
+into the store.
+
 ## Build the baseline, recompute once, then freeze
 
 **A baseline belongs to whoever produced it and travels to nobody.** It records how one person
