@@ -1,6 +1,6 @@
 ---
 name: harness-review
-version: 2.5.0
+version: 2.6.0
 description: Measures whether the harness is getting better, across several lanes - the user's corrective prompts, facts the agent keeps re-deriving, and errors it silently worked around. Use when asked for a harness retrospective, a correction-rate check, "is the harness getting better", "did that fix help", "what keeps going wrong", or a periodic review of how the agent has been failing the user.
 allowed-tools:
   - Bash
@@ -31,6 +31,15 @@ the daily ratio in Step 1 and one per lane in Step 4. Each is marked where it ap
 **All `search` / `timeline` queries must be in English.** The store uses an English-only
 embedding model — a non-English query returns confident but unrelated results. Keep
 identifiers (file paths, service names, error strings) verbatim; translate only the prose.
+
+**Skill version 2.6.0 — check this line before Step 0.** A plugin update does not reach a session
+that is already running: the copy of this file put in front of you can be the text from before the
+update, and it carries nothing that would give that away — no mtime, no size, and the update was
+announced in the same conversation. So read the `version:` field of `<skill dir>/SKILL.md` on disk
+and compare. **They differ → the copy you are reading is stale: read the file on disk and follow
+that**, and say in the report which version the run was made under. Bump this line and the
+frontmatter together on every edit to this file; two version numbers that disagree turn the check
+into noise and it stops being run.
 
 **Nothing measured on one machine belongs in this file.** Counts, dates, week numbers, project
 names, provider strings, a stack's file patterns — all of it is one person's setup, and shipped
@@ -314,7 +323,8 @@ window, not skip it.
 
 **Write this run's numbers to `~/.claude-mem/state/harness-review-series.md`** — and write them
 as **one table row, never a report**: window id range · rows in window · the four primary counts
-· harness-attributable vs floor · the S1/S2/S3 vector · rubric version · Lane C method version ·
+· harness-attributable vs floor · the S1/S2/S3 vector · skill version · rubric version ·
+Lane C method version ·
 one short headline per lane. Nothing else. A lane whose numbers live only in the report dies
 with the chat, and the next run then has nothing to compare against except a frozen baseline —
 never against the run before it, which is exactly what "count first" was supposed to produce.
@@ -581,7 +591,9 @@ anchor drifts a step every run.
 
 **Report the vector, never a single blended index.** One number invites optimising the number,
 and a fall in S3 would hide a rise in S1. It also gives ledger predictions a shape worth having:
-"zero S1 this period" means something, "the correction rate fell four percent" does not.
+"zero S1 this period" means something, "the correction rate fell four percent" does not. The
+level numbers are for the state files: in the report each count is named by its consequence, per
+the output contract.
 
 **Check severity calibration between labellers on identical prompts before reading a difference
 as real.** Two passes reporting very different S1 counts may be using the same bar on different
@@ -1211,6 +1223,26 @@ the ledger section is void — see Step 0.
 
 **Open loops first, then ledger status, then the numbers.** A report that opens with fresh
 findings while the owner's own unshipped proposals sit unlisted has its priorities backwards.
+
+**The report is written in the owner's words; the bookkeeping names stay in the state files.**
+The severity levels, the lane letters, the two halves of the correction count, the ledger
+statuses — each is an index the next run reads, and each is a decode step when it is emitted at a
+person instead. A report that has to be decoded is a report that does not get read. So, in the
+report and not in the files:
+
+- The three severity counts stay three counts, never blended into one, and are named by what they
+  cost: irreversible or it left the session · the wrong work got done, recoverably · the right
+  work at avoidable cost.
+- The lanes are all named, the empty ones included, by what each one reads: the user's corrective
+  prompts · facts the agent re-derives every session · errors it worked around · rules already
+  written, and whether they are obeyed · how tasks ended.
+- The two correction counts are what the harness could have prevented and what it could not.
+- A ledger row scored `shipped, unproven` reads as shipped, but never yet tested by real use.
+- **Row ids stay verbatim** — prompt ids, ledger row numbers, queue ids. They are addresses, not
+  vocabulary, and they are how the owner points at a row.
+
+**Do not add a glossary.** Replacing the term is the fix; explaining the term as well only makes
+the report longer, and a glossary is how the short name gets back in.
 
 **Name the lanes, one line each, including the ones that produced nothing.** Prompts,
 re-derived facts, worked-around errors, rule compliance, task outcomes — five. A lane that was skipped, that came back

@@ -13,18 +13,17 @@ transcripts alone are hundreds of megabytes and must not reach a context window.
     python3 tool-errors.py --raw 25         # distinct error heads, for building signatures
     python3 tool-errors.py --selfcheck      # parsers still work
 
-Signatures live in ~/.claude-mem/state/harness-review-signatures.md, one per line as
-`pattern | name` (lowercase substring match). The seed below is used when that file is absent.
-Widening the list changes the instrument: version the file and say which version a count is
-taken under.
+The signature list is the seed below and nothing else — a state file of signatures was
+deliberately retired, because a list loaded from disk changes the instrument silently while
+every count still reads as comparable. What stays comparable between runs is the grouping
+method, versioned in the series row; widening the seed does not touch it.
 """
-import argparse, glob, json, os, re, sqlite3, sys, tempfile
+import argparse, glob, json, os, sqlite3, sys, tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser('~')
 GUESSED = [0]  # records whose timestamp fell back to file mtime — every one lands on the same day
-SIGNATURE_FILE = os.path.join(HOME, '.claude-mem', 'state', 'harness-review-signatures.md')
 # Ordered: first match wins. Wordings differ per runtime for the same failure, so several
 # patterns map to one name — that is the point of the name.
 # Deliberately absent: bare "Exit code 1". A failing build or test is the work being wrong,
@@ -54,25 +53,6 @@ SEED = [
     ('is required when', 'malformed tool input'),
 ]
 
-
-def load_signatures():
-    if not os.path.exists(SIGNATURE_FILE):
-        return SEED, 'seed (no signature file)'
-    sigs, version = [], 'unversioned'
-    for line in open(SIGNATURE_FILE, encoding='utf-8'):
-        m = re.match(r'\*{0,2}Version:?\*{0,2}\s*(\S+)', line.strip(), re.I)
-        if m:
-            version = m.group(1).rstrip('*')
-        if line.strip().startswith(('- ', '* ')) and '|' in line:
-            pat, _, name = line.strip()[2:].partition('|')
-            pat, name = pat.strip().strip('`').lower(), name.strip()
-            # An empty pattern is a substring of everything and would swallow the whole table
-            # under whatever name happened to sit next to it. Refuse it loudly.
-            if not pat or not name:
-                print(f'  signature file: skipping malformed entry {line.strip()!r}', file=sys.stderr)
-                continue
-            sigs.append((pat, name))
-    return (sigs or SEED), (version if sigs else 'seed (file had no entries)')
 
 
 # --- readers: each yields (session, epoch_ms, text) for one failed/erroring tool call ---
@@ -217,11 +197,11 @@ def main():
     if args.selfcheck:
         return selfcheck()
 
-    sigs, version = load_signatures()
+    sigs = SEED
     floor = parse_since(args.since) if args.since else 0
     if args.since and floor is None:
         sys.exit(f'--since: could not parse {args.since!r}; use YYYY-MM-DD or an ISO timestamp')
-    print(f'signatures: {len(sigs)} patterns, version {version}'
+    print(f'signatures: {len(sigs)} patterns, seed from the skill'
           f"{'' if not args.since else ', since ' + args.since}\n")
 
     found_any = False
@@ -301,24 +281,7 @@ def selfcheck():
         agg = tally([('s', 1785000000000, 'Operation not permitted')], SEED)
         assert agg['sandbox / permission denied']['hits'] == 1, dict(agg)
 
-        global SIGNATURE_FILE
-        sigfile = os.path.join(tmp, 'sig.md')
-        open(sigfile, 'w').write('**Version: v9**\n\n- Some Pattern | a name\n- other | b name\n')
-        SIGNATURE_FILE, keep = sigfile, SIGNATURE_FILE
-        try:
-            sigs, version = load_signatures()
-            assert version == 'v9' and ('some pattern', 'a name') in sigs, (version, sigs)
-            SIGNATURE_FILE = os.path.join(tmp, 'absent.md')
-            sigs, version = load_signatures()
-            assert sigs is SEED and 'seed' in version, version
-            bad = os.path.join(tmp, 'bad.md')
-            open(bad, 'w').write('- | nameless\n-  | \n- real | a name\n')
-            SIGNATURE_FILE = bad
-            sigs, _ = load_signatures()
-            assert sigs == [('real', 'a name')], sigs
-        finally:
-            SIGNATURE_FILE = keep
-    print('selfcheck ok: claude, codex, opencode readers, the tally and the signature loader')
+    print('selfcheck ok: claude, codex, opencode readers, and the tally')
 
 
 if __name__ == '__main__':
