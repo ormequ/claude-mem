@@ -263,6 +263,22 @@ false positives to be subtracted later. They are **not prompts at all**, and the
 window before anything is labelled, or every rate in this lane is computed over a denominator
 that is partly machine.
 
+**The class is wider than the envelope, though: it is every prompt authored by an agent rather
+than by the user, and it comes in two shapes.** The inbound relay arrives wrapped, so sight
+catches it. The outbound brief — what one session types into another agent's session — is stored
+there as that session's own prompt with no wrapper at all: long, imperative, written in English,
+indistinguishable from a hard correction the user typed. Both leave the window before any rate is
+computed. Whether this store marks outbound briefs with a literal prefix, and what that prefix
+is, belongs in the vocabulary file — it is a local convention, not a property of the lane.
+
+**A convention has a start date, and a window can reach back past it.** Prompts written before it
+carry no marker, so they are subtracted by shape — who wrote it, who it was addressed to — and
+the report **says which part of the window was subtracted by marker and which by shape**. A run
+claiming a clean marker-based subtraction over a period where no marker existed has not measured
+what it claims. The stakes exceed the count: an unmarked agent prompt is not evenly spread noise,
+it is noise shaped like the signal, and it lands in the largest correction bucket rather than
+spreading across all four — so a few rows move the rate further than their number suggests.
+
 Count them and report the number separately: it says how much of the table is not the user, and
 it grows with parallel work. **If it is more than a rounding error, the fix belongs in the
 capture hook, not in this skill** — a review that quietly filters them each run leaves every
