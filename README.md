@@ -140,37 +140,44 @@
 ## Quick Start
 
 > `npx claude-mem` installs **upstream**, not this fork — that npm name belongs to
-> [thedotmack/claude-mem](https://github.com/thedotmack/claude-mem). This fork is
-> not published to npm. Install it from its own plugin marketplace or from a checkout.
+> [thedotmack/claude-mem](https://github.com/thedotmack/claude-mem). This fork is not
+> published to npm, so every harness installs the same way: from a checkout.
 
-**Claude Code** — the marketplace path is enough:
-
-```bash
-/plugin marketplace add ormequ/claude-mem
-
-/plugin install claude-mem
-```
-
-**Every other harness** (OpenCode, Codex CLI, Cursor, Windsurf, …) — install from a checkout:
+Clone once into a fixed place and build:
 
 ```bash
-git clone https://github.com/ormequ/claude-mem.git
-cd claude-mem
+mkdir -p ~/.claude-mem
+git clone https://github.com/ormequ/claude-mem.git ~/.claude-mem/installation
+cd ~/.claude-mem/installation
 npm install
 npm run build
+```
 
+Then install for each harness you use:
+
+```bash
+node dist/npx-cli/index.js install --ide claude-code
 node dist/npx-cli/index.js install --ide opencode
 ```
 
 Valid `--ide` values: `claude-code`, `opencode`, `openclaw`, `windsurf`, `codex-cli`,
-`cursor`, `copilot-cli`, `antigravity`, `goose`, `roo-code`, `warp`. Run both commands
+`cursor`, `copilot-cli`, `antigravity`, `goose`, `roo-code`, `warp`. Run all of this
 outside a sandbox — the build reads `node_modules` and the install writes under `~/.claude`.
+
+`--ide claude-code` copies the plugin into `~/.claude/plugins/` and registers it, so the
+`/plugin marketplace` commands are not needed.
 
 Then start the worker and read the port off `status` (it is derived per user, not fixed):
 
 ```bash
 node dist/npx-cli/index.js start
 node dist/npx-cli/index.js status
+```
+
+To update later, pull and repeat the build and the `install --ide` lines:
+
+```bash
+cd ~/.claude-mem/installation && git pull && npm install && npm run build
 ```
 
 Installs default to the OpenAI-compatible OpenRouter provider, and **the installer never
@@ -191,16 +198,15 @@ Or let the agent do it — paste this prompt into OpenCode, Claude Code, Codex, 
 ```text
 Install claude-mem from this fork (github.com/ormequ/claude-mem).
 
-`npx claude-mem` is NOT this fork: that name on npm belongs to upstream. Install
-from a checkout, or from this fork's own plugin marketplace.
+`npx claude-mem` is NOT this fork: that name on npm belongs to upstream. This
+fork is not on npm, so it installs from a checkout — including for Claude Code.
 
-1. In Claude Code, the marketplace path is enough:
-     /plugin marketplace add ormequ/claude-mem
-     /plugin install claude-mem
+1. Clone and build:
+     mkdir -p ~/.claude-mem
+     git clone https://github.com/ormequ/claude-mem.git ~/.claude-mem/installation
+     cd ~/.claude-mem/installation && npm install && npm run build
 
-2. For every other harness, install from a checkout:
-     git clone https://github.com/ormequ/claude-mem.git
-     cd claude-mem && npm install && npm run build
+2. Install for the harness you are running in:
      node dist/npx-cli/index.js install --ide <harness id>
    Valid ids: claude-code, opencode, openclaw, windsurf, codex-cli, cursor,
    copilot-cli, antigravity, goose, roo-code, warp.

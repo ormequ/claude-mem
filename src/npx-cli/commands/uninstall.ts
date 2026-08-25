@@ -410,6 +410,9 @@ export async function runUninstallCommand(): Promise<void> {
     [
       `Your data directory at ${styleText('cyan', '~/.claude-mem')} was preserved.`,
       'To remove it manually: rm -rf ~/.claude-mem',
+      // FORK: the documented install clones this fork into
+      // ~/.claude-mem/installation, so that rm takes the checkout with it.
+      'Note that ~/.claude-mem/installation holds the fork checkout, if you installed that way.',
     ].join('\n'),
     'Note',
   );
