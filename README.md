@@ -273,6 +273,17 @@ The installer handles dependencies, plugin setup, AI provider configuration, wor
 
 See [Architecture Overview](https://docs.claude-mem.ai/architecture/overview) for details.
 
+**Fork addition - the `harness-review` skill.** The hooks above record what happened; this skill
+reads the same store back to ask whether the harness is getting better. It counts the corrections
+you had to type, the facts the agent establishes from scratch session after session, the tool
+errors it routed around instead of reporting, and the rules already written that go unobeyed. It
+also looks the other way, for a procedure that worked and is worth keeping. Every finding turns
+into a mechanical proposal - a hook, a prohibition, a config field, an edit to an instruction
+file - citing the rows that produced it, and every run scores the previous run's proposals before
+measuring anything new, so a change that did not help shows up instead of being assumed. Invoke it
+as `claude-mem:harness-review`; the lanes and their traps are documented in
+[`fork-notes/prompts-and-harness-review.md`](fork-notes/prompts-and-harness-review.md).
+
 ---
 
 ## MCP Search Tools
