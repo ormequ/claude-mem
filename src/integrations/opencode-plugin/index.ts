@@ -118,9 +118,8 @@ interface SessionCompactingOutput {
   context?: string[];
 }
 
-interface ChatSystemTransformInput {
-  sessionID?: string;
-}
+/** OpenCode passes `{}` here — the hook carries no session identity. */
+type ChatSystemTransformInput = Record<string, never>;
 
 interface ChatSystemTransformOutput {
   system?: string[];
@@ -147,7 +146,12 @@ function resolveWorkerHost(): string {
 const WORKER_BASE_URL = `http://${resolveWorkerHost()}:${resolveWorkerPort()}`;
 const MAX_TOOL_RESPONSE_LENGTH = 1000;
 const HARNESS_PROJECT_NAMES = new Set(["opencode", "global"]);
-const MEMORY_CONTEXT_MARKER = "<claude-mem-context>";
+// Deliberately NOT `<claude-mem-context>`: the installer wraps the static
+// AGENTS.md primer in that tag, AGENTS.md reaches the system prompt, and using
+// the same marker here made the hook read the primer as "memory already
+// injected" — so the real context was skipped on every turn that carried it.
+const MEMORY_CONTEXT_MARKER = "<claude-mem-recent-context>";
+const MEMORY_CONTEXT_MARKER_CLOSE = "</claude-mem-recent-context>";
 
 const JSON_HEADERS: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -306,19 +310,30 @@ async function fetchWorkerContext(projectName: string): Promise<string | null> {
   return contextText.trim();
 }
 
+const INJECTABLE_CONTEXT_TTL_MS = 60_000;
+
 async function fetchInjectableContext(projectName: string): Promise<string | null> {
   const contextText = await fetchWorkerContext(projectName);
   if (!contextText) return null;
-  return `${MEMORY_CONTEXT_MARKER}\n${contextText}\n</claude-mem-context>`;
-}
-
-function getMemoryInjectionKey(input: ChatSystemTransformInput, projectName: string): string {
-  return input.sessionID ? `session:${input.sessionID}` : `project:${projectName}`;
+  return `${MEMORY_CONTEXT_MARKER}\n${contextText}\n${MEMORY_CONTEXT_MARKER_CLOSE}`;
 }
 
 export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
   const projectName = resolveProjectName(ctx);
-  const injectedMemoryContextKeys = new Set<string>();
+  // system.transform runs before every model call; without this the worker gets
+  // hit once per turn for a block that barely changes.
+  let cachedContext: { text: string; expiresAt: number } | null = null;
+
+  const injectableContext = async (): Promise<string | null> => {
+    const now = Date.now();
+    if (cachedContext && cachedContext.expiresAt > now) return cachedContext.text;
+
+    const contextText = await fetchInjectableContext(projectName);
+    if (!contextText) return null;
+
+    cachedContext = { text: contextText, expiresAt: now + INJECTABLE_CONTEXT_TTL_MS };
+    return contextText;
+  };
 
   console.log(`[claude-mem] OpenCode plugin loading (project: ${projectName})`);
 
@@ -401,18 +416,17 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
       output: ChatSystemTransformOutput,
     ): Promise<void> => {
       if (!output?.system) return;
-      const injectionKey = getMemoryInjectionKey(input, projectName);
-      if (output.system.some((entry) => entry.includes(MEMORY_CONTEXT_MARKER))) {
-        injectedMemoryContextKeys.add(injectionKey);
-        return;
-      }
-      if (injectedMemoryContextKeys.has(injectionKey)) return;
+      // The hook's input is `{}` — no sessionID — so there is no per-session key
+      // to remember. A process-wide "already injected" flag meant the first turn
+      // got memory and every later turn (and every later session in the same
+      // OpenCode process) went without it. The system array itself is the only
+      // honest signal: inject whenever this one does not carry the block yet.
+      if (output.system.some((entry) => entry.includes(MEMORY_CONTEXT_MARKER))) return;
 
-      const contextText = await fetchInjectableContext(projectName);
+      const contextText = await injectableContext();
       if (!contextText) return;
 
       output.system.push(contextText);
-      injectedMemoryContextKeys.add(injectionKey);
       // ponytail: OpenCode renders plugin stdout into the TUI, so the happy path
       // stays silent — set CLAUDE_MEM_DEBUG=1 to see injections again.
       if (process.env.CLAUDE_MEM_DEBUG) {
@@ -466,7 +480,6 @@ export const ClaudeMemPlugin = async (ctx: OpenCodePluginContext) => {
           initializedSessionIds.delete(sessionID);
           lastAssistantMessageBySession.delete(sessionID);
           sessionsWithUnsummarizedWork.delete(sessionID);
-          injectedMemoryContextKeys.delete(`session:${sessionID}`);
           break;
         }
         default:

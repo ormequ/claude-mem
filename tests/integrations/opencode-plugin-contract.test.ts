@@ -328,7 +328,7 @@ describe("OpenCode plugin event contract", () => {
     }
   });
 
-  it("injects worker context only once per OpenCode session", async () => {
+  it("injects worker context into every system prompt that lacks it", async () => {
     const requestedInjectUrls: string[] = [];
     let injectCount = 0;
     const originalFetch = globalThis.fetch;
@@ -347,12 +347,29 @@ describe("OpenCode plugin event contract", () => {
       const firstOutput = { system: ["first opencode system prompt"] };
       const secondOutput = { system: ["second opencode system prompt"] };
 
-      await plugin["experimental.chat.system.transform"]({ sessionID: "ses_mks" }, firstOutput);
-      await plugin["experimental.chat.system.transform"]({ sessionID: "ses_mks" }, secondOutput);
+      // The hook's input is `{}` — no session identity — so a "once per session"
+      // flag silently dropped memory from every turn after the first.
+      await plugin["experimental.chat.system.transform"]({}, firstOutput);
+      await plugin["experimental.chat.system.transform"]({}, secondOutput);
 
       expect(firstOutput.system.join("\n")).toContain("dynamic memory context 1");
-      expect(secondOutput.system.join("\n")).not.toContain("dynamic memory context 2");
+      expect(secondOutput.system.join("\n")).toContain("dynamic memory context 1");
+      // Served from the plugin's short-lived cache, so the worker is hit once.
       expect(requestedInjectUrls).toHaveLength(1);
+
+      // A system prompt that already carries the block is left alone.
+      const carriedOver = { system: [...secondOutput.system] };
+      await plugin["experimental.chat.system.transform"]({}, carriedOver);
+      expect(carriedOver.system).toHaveLength(secondOutput.system.length);
+
+      // The installer's AGENTS.md primer is wrapped in `<claude-mem-context>`.
+      // That tag must not read as "memory already injected" — it did, and the
+      // real context was then skipped on every turn carrying AGENTS.md.
+      const withPrimer = {
+        system: ["<claude-mem-context>\n# Claude-Mem Runtime Memory\n</claude-mem-context>"],
+      };
+      await plugin["experimental.chat.system.transform"]({}, withPrimer);
+      expect(withPrimer.system.join("\n")).toContain("dynamic memory context 1");
     } finally {
       globalThis.fetch = originalFetch;
     }
