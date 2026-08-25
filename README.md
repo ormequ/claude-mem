@@ -139,33 +139,54 @@
 
 ## Quick Start
 
-Install with a single command:
+> `npx claude-mem` installs **upstream**, not this fork — that npm name belongs to
+> [thedotmack/claude-mem](https://github.com/thedotmack/claude-mem). This fork is
+> not published to npm. Install it from its own plugin marketplace or from a checkout.
+
+**Claude Code** — the marketplace path is enough:
 
 ```bash
-npx claude-mem install
-```
-
-Or install for OpenCode:
-
-```bash
-npx claude-mem install --ide opencode
-```
-
-Or install for Antigravity CLI ([setup guide](https://docs.claude-mem.ai/antigravity-cli/setup)):
-
-```bash
-npx claude-mem install --ide antigravity
-```
-
-Or install from the plugin marketplace inside Claude Code:
-
-```bash
-/plugin marketplace add thedotmack/claude-mem
+/plugin marketplace add ormequ/claude-mem
 
 /plugin install claude-mem
 ```
 
-Or let the agent install it — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
+**Every other harness** (OpenCode, Codex CLI, Cursor, Windsurf, …) — install from a checkout:
+
+```bash
+git clone https://github.com/ormequ/claude-mem.git
+cd claude-mem
+npm install
+npm run build
+
+node dist/npx-cli/index.js install --ide opencode
+```
+
+Valid `--ide` values: `claude-code`, `opencode`, `openclaw`, `windsurf`, `codex-cli`,
+`cursor`, `copilot-cli`, `antigravity`, `goose`, `roo-code`, `warp`. Run both commands
+outside a sandbox — the build reads `node_modules` and the install writes under `~/.claude`.
+
+Then start the worker and read the port off `status` (it is derived per user, not fixed):
+
+```bash
+node dist/npx-cli/index.js start
+node dist/npx-cli/index.js status
+```
+
+Installs default to the OpenAI-compatible OpenRouter provider, and **the installer never
+asks for your API key** — put it in `~/.claude-mem/settings.json` yourself:
+
+```json
+{
+  "CLAUDE_MEM_PROVIDER": "openrouter",
+  "CLAUDE_MEM_OPENROUTER_API_KEY": "<your key>"
+}
+```
+
+Memory capture stays idle until that key is present. Choosing the `claude` provider instead
+bills your Claude Code subscription for compression that runs on every tool call.
+
+Or let the agent do it — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
 
 ```text
 Install claude-mem from this fork (github.com/ormequ/claude-mem).
@@ -199,15 +220,20 @@ from a checkout, or from this fork's own plugin marketplace.
 
 Restart Claude Code. Context from previous sessions will automatically appear in new sessions.
 
-> **Note:** Claude-Mem is also published on npm, but `npm install -g claude-mem` installs the **SDK/library only** — it does not register the plugin hooks or set up the worker service. Always install via `npx claude-mem install` or the `/plugin` commands above.
+> **Note:** the `claude-mem` package on npm is upstream's, and installing it globally gives
+> you the **SDK/library only** — no plugin hooks, no worker service, and none of this fork's
+> changes. Use the marketplace or checkout commands above.
 
 ### 🦞 OpenClaw Gateway
 
-Install claude-mem as a persistent memory plugin on [OpenClaw](https://openclaw.ai) gateways with a single command:
+Install claude-mem as a persistent memory plugin on [OpenClaw](https://openclaw.ai) gateways
+with a single command — note this script is **upstream's** and installs upstream, not this fork:
 
 ```bash
 curl -fsSL https://install.cmem.ai/openclaw.sh | bash
 ```
+
+For this fork on OpenClaw, use the checkout path above with `--ide openclaw`.
 
 The installer handles dependencies, plugin setup, AI provider configuration, worker startup, and optional real-time observation feeds to Telegram, Discord, Slack, and more. See the [OpenClaw Integration Guide](https://docs.claude-mem.ai/openclaw-integration) for details.
 
