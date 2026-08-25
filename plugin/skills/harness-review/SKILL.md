@@ -1,6 +1,6 @@
 ---
 name: harness-review
-version: 2.6.1
+version: 2.6.2
 description: Measures whether the harness is getting better, across several lanes - the user's corrective prompts, facts the agent keeps re-deriving, and errors it silently worked around. Use when asked for a harness retrospective, a correction-rate check, "is the harness getting better", "did that fix help", "what keeps going wrong", or a periodic review of how the agent has been failing the user.
 allowed-tools:
   - Bash
@@ -790,6 +790,15 @@ either → propose nothing and record that you decided so.
 discovery differently do not cluster, and no number here can tell you how many were missed.
 Report what the clusters show; never report the total as "the amount of re-derivation".
 
+**The miss is not uniform, and its shape is known.** What survives exact matching is what the
+summariser words the same way every time — repo layout, where a constant lives, a path. What
+gets shredded is a fact stated in prose that varies: the flags that make one CLI print what is
+wanted, the order two commands have to run in, the argument an API rejects silently. Those are
+also the facts whose re-derivation costs the most per occurrence, so this lane is blind
+precisely where its yield would be highest. **Do not wait for that class to cluster here** — it
+has its own intake, keyed to the failures it ends rather than to the words it is written in;
+see "The intake nobody types" below.
+
 **Group by project.** The fix is a file in one repo, so a cluster spanning projects is usually
 two different facts colliding on a generic title.
 
@@ -1306,6 +1315,39 @@ risks counting impressions. Both halves have to hold:
   rewrite the steps. Holding a procedure to the rule's evidence discards every candidate of that
   kind. "The run went well" is the agent grading its own work, and it does not qualify however
   well it reads.
+
+### The intake nobody types
+
+The sweep above finds what was **built** — a skill, a hook, a rule in a file. It cannot see the
+other kind of thing worth keeping: an incantation worked out in flight and never written down.
+The flags that make one CLI print what is wanted, the order two commands have to run in, the
+argument an API rejects silently. Nothing failed at the end, nobody complained, no artefact
+exists, and Lane B will not cluster it because the summariser words it differently every time.
+Waiting for the user to notice and say "make that a skill" is the same defect this file names
+elsewhere: the harness working only where a human pays attention for it.
+
+**A signature that stopped is the trace such a fact leaves.** It is already computed — the
+`tool-errors.py` spans in Lane C — and the run without `--since` is the one that shows it, since
+a cursor hides exactly the signature that ended before the last review. Per span whose last hit
+falls inside the window and whose right edge is silence:
+
+1. **Check the tool is still in use in the window.** A signature stops when someone solves it and
+   also when the work simply moved on. `files_read`/`files_modified` or a later matching call
+   separates the two. No later use, no candidate: silence is not a solution.
+2. **Read the session holding the last hit**, and the observations that follow it in that session.
+   What ended the span is in there — the call that finally worked, the flag that was missing, the
+   step that had to come first.
+3. **Write it as the candidate procedure**, in the steps that would reproduce the working call,
+   not as a retelling of how it was found.
+
+Then it goes through the bar above unchanged, and the procedure half of the evidence rule is the
+half that applies: the external system reported the outcome (that is what the span ending *is*),
+and the first reuse must not have to rewrite the steps.
+
+**The ceiling: this finds what stopped failing loudly.** An incantation worked out on the first
+try leaves no span and stays invisible here, and a span that ends because the environment was
+fixed elsewhere reads identically to one ended by a person learning something. Both are read out
+in step 1 and 2 by hand, and the count is candidates found, never "everything worth harvesting".
 
 **Nothing in the practitioner corpus does this, and a later run should not go hunting for a
 precedent.** Harvesting a successful procedure is missing from the systems that have been looked
