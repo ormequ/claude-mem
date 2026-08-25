@@ -1101,11 +1101,15 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     if (initialProvider !== 'claude') {
       const wrote = mergeSettings({ CLAUDE_MEM_PROVIDER: initialProvider });
       if (wrote) log.info(`Saved provider=${initialProvider} to ~/.claude-mem/settings.json`);
-      log.warn(
-        `${initialProvider} needs an API key, and this installer will not take it. `
-        + `Add it yourself in ~/.claude-mem/settings.json under `
-        + `"CLAUDE_MEM_${initialProvider.toUpperCase()}_API_KEY". Memory capture stays idle until then.`,
-      );
+      const providerKeyName = `CLAUDE_MEM_${initialProvider.toUpperCase()}_API_KEY`;
+      const configuredKey = getSetting(providerKeyName as keyof SettingsDefaults) as string | undefined;
+      if (!configuredKey || configuredKey.trim().length === 0) {
+        log.warn(
+          `${initialProvider} needs an API key, and this installer will not take it. `
+          + `Add it yourself in ~/.claude-mem/settings.json under `
+          + `"${providerKeyName}". Memory capture stays idle until then.`,
+        );
+      }
     }
     return initialProvider;
   }
@@ -1191,21 +1195,52 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     return selectedProvider;
   }
 
-  // FORK: the installer no longer asks for the key. An install is often driven
-  // by an agent, and anything typed at its prompt lands in that agent's
-  // transcript. The human writes the key into settings.json themselves; there is
-  // also no silent fall back to `claude`, which used to turn a cancelled key
-  // prompt into a subscription-billed provider.
-  const wrote = mergeSettings({ CLAUDE_MEM_PROVIDER: selectedProvider });
+  // FORK: this prompt is for a human at a TTY only. `promptProvider` reaches
+  // here in interactive mode, so a key typed here is masked and goes straight to
+  // settings.json — the non-interactive path above never asks, because there the
+  // caller is an agent and anything it types lands in its own transcript.
+  const apiKeyResult = await p.password({
+    message: `Paste your ${providerLabel} API key:`,
+    mask: '*',
+    validate: (v?: string) => (!v || v.trim().length === 0) ? 'API key required' : undefined,
+  });
+
+  // Cancelling used to fall back to `claude`, which is the subscription-billed
+  // provider by another route. Keep the chosen provider and say what is missing.
+  if (p.isCancel(apiKeyResult)) {
+    const savedWithoutKey = mergeSettings({ CLAUDE_MEM_PROVIDER: selectedProvider });
+    if (savedWithoutKey) log.info(`Saved provider=${selectedProvider} to ~/.claude-mem/settings.json`);
+    log.warn(
+      `No key given. Add it yourself in ~/.claude-mem/settings.json under `
+      + `"${keyEnvName}" — memory capture stays idle until then.`,
+    );
+    return selectedProvider;
+  }
+
+  const settingsToWrite: Record<string, string> = {
+    CLAUDE_MEM_PROVIDER: selectedProvider,
+    [keyEnvName]: String(apiKeyResult).trim(),
+  };
+
+  // OpenRouter's client speaks plain OpenAI chat-completions, so any compatible
+  // gateway works — but only if its base URL is recorded. Nothing asked for it
+  // before, which left gateway users editing settings.json after the fact.
+  if (selectedProvider === 'openrouter') {
+    const baseUrlResult = await p.text({
+      message: 'Base URL for an OpenAI-compatible gateway (Enter for OpenRouter itself):',
+      placeholder: 'https://your-gateway/v1',
+      defaultValue: '',
+    });
+    if (!p.isCancel(baseUrlResult)) {
+      const baseUrl = String(baseUrlResult).trim();
+      if (baseUrl.length > 0) settingsToWrite.CLAUDE_MEM_OPENROUTER_BASE_URL = baseUrl;
+    }
+  }
+
+  const wrote = mergeSettings(settingsToWrite);
   if (wrote) {
     log.info(`Saved provider=${selectedProvider} to ~/.claude-mem/settings.json`);
   }
-  log.warn(
-    `${providerLabel} needs an API key, and this installer will not take it. `
-    + `Add it yourself in ~/.claude-mem/settings.json:\n`
-    + `  "${keyEnvName}": "<your key>"\n`
-    + `Memory capture stays idle until that key is present.`,
-  );
   return selectedProvider;
 }
 
@@ -1389,7 +1424,14 @@ async function promptTelemetryOptIn(): Promise<void> {
   log.success(consent ? 'Thanks! Anonymized usage sharing is on.' : 'No problem — telemetry is off.');
 }
 
+// FORK: upstream asks for a work email during install and posts it to its
+// signup service. This fork ships to nobody's waitlist, so the prompt only
+// collects an address the installer has no use for. The flag keeps the rest of
+// the function intact so upstream merges keep applying cleanly.
+const CMEM_ONLINE_SIGNUP_ENABLED = false;
+
 async function promptCmemOnlineOptIn(version: string): Promise<void> {
+  if (!CMEM_ONLINE_SIGNUP_ENABLED) return;
   // Interactive-only, and easy to turn off for CI / scripted installs.
   if (!isInteractive) return;
   if (process.env.CI) return;
