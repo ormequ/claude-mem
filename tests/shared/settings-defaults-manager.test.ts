@@ -350,6 +350,14 @@ describe('SettingsDefaultsManager', () => {
       expect(defaults.CLAUDE_MEM_DATA_DIR).toBeDefined();
       expect(defaults.CLAUDE_MEM_LOG_LEVEL).toBeDefined();
     });
+
+    // FORK guardrail: upstream defaults this to 'claude', which spends the
+    // Claude Code subscription on compression that runs per tool call whenever
+    // settings.json names no provider. An upstream merge that restores it must
+    // fail here. See FORK_NOTES.
+    it('defaults the provider to the OpenAI-compatible path, never claude', () => {
+      expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_PROVIDER).toBe('openrouter');
+    });
   });
 
   describe('get', () => {

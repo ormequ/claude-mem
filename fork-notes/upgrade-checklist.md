@@ -16,6 +16,12 @@ After rebasing or merging upstream:
    A merge that reintroduces `platform_source` filtering on any read path fails
    these — that is the signal to re-drop it (inject/ObservationCompiler,
    SearchManager, SearchOrchestrator, DataRoutes) before shipping.
+   Also run the **provider-default guard**
+   (`bun test tests/shared/settings-defaults-manager.test.ts`). Upstream defaults
+   `CLAUDE_MEM_PROVIDER` to `claude`, which spends the Claude Code subscription
+   on per-tool-call compression whenever settings.json names no provider; the
+   fork defaults to the OpenAI-compatible `openrouter` path. A merge that
+   restores `claude` fails that test.
    Also run the **rate-limit guard** (`bun test tests/openrouter-rate-limit.test.ts`).
    A merge that reverts the `retry.ts` rate-limit branch fails it — see
    "Rate limits on the OpenAI-compatible path" for what to re-apply.

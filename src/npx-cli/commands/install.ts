@@ -965,7 +965,11 @@ async function bootstrapAndPersistServerApiKey(): Promise<void> {
 }
 
 async function promptProvider(options: InstallOptions): Promise<ProviderId> {
-  const initialProvider = (getSetting('CLAUDE_MEM_PROVIDER') as ProviderId) || 'claude';
+  // FORK: an install that picks `claude` pins background compression to the
+  // Claude Code subscription, which is exactly the bill this fork's owner does
+  // not want to pay for a job that runs on every tool call. Installs default to
+  // the OpenAI-compatible OpenRouter path instead; `claude` stays selectable.
+  const initialProvider = (getSetting('CLAUDE_MEM_PROVIDER') as ProviderId) || 'openrouter';
 
   const persistClaudeProvider = (authMethod?: 'subscription' | 'api-key' | 'gateway') => {
     const resolvedAuthMethod = authMethod ?? resolveClaudeAuthMethod();
@@ -1090,6 +1094,19 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
       log.warn(`Provider=${options.provider} requested non-interactively. API key prompt skipped — set CLAUDE_MEM_${options.provider.toUpperCase()}_API_KEY and CLAUDE_MEM_PROVIDER in settings.json or env manually if not already set.`);
       return options.provider;
     }
+    // FORK: a non-interactive install is usually an agent running the command,
+    // and returning the resolved provider without writing it left settings.json
+    // empty — so the runtime fell back to its own `claude` default and the
+    // subscription paid for every observation. Write the choice down.
+    if (initialProvider !== 'claude') {
+      const wrote = mergeSettings({ CLAUDE_MEM_PROVIDER: initialProvider });
+      if (wrote) log.info(`Saved provider=${initialProvider} to ~/.claude-mem/settings.json`);
+      log.warn(
+        `${initialProvider} needs an API key, and this installer will not take it. `
+        + `Add it yourself in ~/.claude-mem/settings.json under `
+        + `"CLAUDE_MEM_${initialProvider.toUpperCase()}_API_KEY". Memory capture stays idle until then.`,
+      );
+    }
     return initialProvider;
   }
 
@@ -1144,9 +1161,9 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     const providerResult = await p.select<ProviderId>({
       message: 'Which memory provider do you want to use?',
       options: [
-        { value: 'claude', label: 'Claude Agent SDK (recommended)' },
+        { value: 'openrouter', label: 'OpenRouter / any OpenAI-compatible endpoint (recommended)' },
         { value: 'gemini', label: 'Gemini' },
-        { value: 'openrouter', label: 'OpenRouter' },
+        { value: 'claude', label: 'Claude Agent SDK (bills your Claude Code subscription on every tool call)' },
       ],
       initialValue: initialProvider,
     });
@@ -1174,26 +1191,21 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     return selectedProvider;
   }
 
-  const apiKeyResult = await p.password({
-    message: `Paste your ${providerLabel} API key:`,
-    mask: '*',
-    validate: (v?: string) => (!v || v.trim().length === 0) ? 'API key required' : undefined,
-  });
-
-  if (p.isCancel(apiKeyResult)) {
-    log.warn(`API key prompt cancelled — falling back to Claude provider.`);
-    persistClaudeProvider();
-    return 'claude';
-  }
-
-  const apiKey = String(apiKeyResult).trim();
-  const wrote = mergeSettings({
-    CLAUDE_MEM_PROVIDER: selectedProvider,
-    [keyEnvName]: apiKey,
-  });
+  // FORK: the installer no longer asks for the key. An install is often driven
+  // by an agent, and anything typed at its prompt lands in that agent's
+  // transcript. The human writes the key into settings.json themselves; there is
+  // also no silent fall back to `claude`, which used to turn a cancelled key
+  // prompt into a subscription-billed provider.
+  const wrote = mergeSettings({ CLAUDE_MEM_PROVIDER: selectedProvider });
   if (wrote) {
     log.info(`Saved provider=${selectedProvider} to ~/.claude-mem/settings.json`);
   }
+  log.warn(
+    `${providerLabel} needs an API key, and this installer will not take it. `
+    + `Add it yourself in ~/.claude-mem/settings.json:\n`
+    + `  "${keyEnvName}": "<your key>"\n`
+    + `Memory capture stays idle until that key is present.`,
+  );
   return selectedProvider;
 }
 
