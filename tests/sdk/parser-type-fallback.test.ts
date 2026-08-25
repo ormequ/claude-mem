@@ -46,6 +46,18 @@ describe('observation type fallback', () => {
     expect(obs.type).toBe('bugfix');
   });
 
+  // Regression: an off-vocabulary type used to be stored as emitted. The model invents them
+  // at scale, and an invented type is dropped silently by every consumer filtering on type.
+  it('coerces a type the mode does not declare', () => {
+    const obs = firstObservation(`<observation>
+      <type>handler_16_completion_phase_2_transition</type>
+      <title>Handler moved to phase 2</title>
+      <narrative>The transition landed without a rewrite.</narrative>
+    </observation>`);
+
+    expect(obs.type).toBe('change');
+  });
+
   // The two types added 2026-08-03. `finding` separates a conclusion from the discovery that
   // led to it; `failed_attempt` is the only record of a dead end, and nothing else captures it.
   it.each(['finding', 'failed_attempt'])('accepts the %s type', (type) => {

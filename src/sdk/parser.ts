@@ -82,19 +82,39 @@ function canonicalizeConcept(concept: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-function recordConceptDrops(dropped: string[], correlationId?: string | number): void {
-  logger.debug('PARSER', 'Dropped off-vocabulary concepts', { correlationId, dropped });
+function appendStateLine(file: string, payload: Record<string, unknown>): void {
   try {
     const dir = join(DATA_DIR, 'state');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const line = JSON.stringify({ ts: Date.now(), dropped, correlationId: correlationId ?? null });
-    appendFileSync(join(dir, 'concept-drops.jsonl'), line + '\n');
+    appendFileSync(join(dir, file), JSON.stringify({ ts: Date.now(), ...payload }) + '\n');
   } catch (error: unknown) {
     // stats are best-effort; never fail parsing over them
-    logger.debug('PARSER', 'Failed to persist concept-drop stats', {
+    logger.debug('PARSER', `Failed to persist ${file}`, {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function recordConceptDrops(dropped: string[], correlationId?: string | number): void {
+  logger.debug('PARSER', 'Dropped off-vocabulary concepts', { correlationId, dropped });
+  appendStateLine('concept-drops.jsonl', { dropped, correlationId: correlationId ?? null });
+}
+
+function recordTypeCoercion(
+  emitted: string,
+  coercedTo: string,
+  correlationId?: string | number
+): void {
+  logger.error(
+    'PARSER',
+    `Off-vocabulary observation type "${emitted}" coerced to "${coercedTo}"`,
+    { correlationId }
+  );
+  appendStateLine('type-coercions.jsonl', {
+    emitted,
+    coercedTo,
+    correlationId: correlationId ?? null,
+  });
 }
 
 export function parseAgentXml(raw: string, correlationId?: string | number): ParseResult {
@@ -167,13 +187,16 @@ function parseObservationBlocks(text: string, correlationId?: string | number): 
     // fix. See FORK_NOTES "Observation type vocabulary".
     const fallbackType = validTypes.includes('change') ? 'change' : validTypes[0];
     let finalType = fallbackType;
-    if (type) {
-      finalType = type;
-      if (!validTypes.includes(type)) {
-        logger.error('PARSER', `Invalid observation type: ${type}, preserving emitted type`, { correlationId });
-      }
-    } else {
+    if (!type) {
       logger.error('PARSER', `Observation missing type field, using "${fallbackType}"`, { correlationId });
+    } else if (validTypes.includes(type)) {
+      finalType = type;
+    } else {
+      // fork: was "preserve the emitted type". At scale the model invents types instead of
+      // picking one, and a stored row with an invented type is dropped silently by every
+      // consumer that filters on type, while type shares stop adding up. Coerce to the
+      // fallback; the emitted string is kept in the coercion log, not in the row.
+      recordTypeCoercion(type, fallbackType, correlationId);
     }
 
     // #3379: concepts are matched exactly by the injection SQL, so a prefixed

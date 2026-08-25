@@ -146,7 +146,9 @@ describe('parseAgentXml — observations', () => {
     expect(result[0].type).toBe('bugfix');
   });
 
-  it('preserves a reporter-shaped unsupported observation type', () => {
+  // fork: upstream preserved the emitted type here. An off-vocabulary type is invisible to
+  // every consumer that filters on type, so it is coerced to the mode fallback instead.
+  it('coerces a reporter-shaped unsupported observation type to the mode fallback', () => {
     const xml = `<observation>
       <type>code</type>
       <title>Reporter-shaped unsupported type</title>
@@ -155,7 +157,7 @@ describe('parseAgentXml — observations', () => {
     const result = expectObservation(xml);
 
     expect(result).toHaveLength(1);
-    expect(result[0].type).toBe('code');
+    expect(result[0].type).toBe('bugfix');
   });
 
   it('returns a fail-fast result when no observation/summary blocks are present', () => {

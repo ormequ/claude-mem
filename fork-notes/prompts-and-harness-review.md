@@ -106,6 +106,16 @@
   which is correct for a chronological record. Test: `tests/machine-relay-prompts.test.ts`.
   The harness-review skill drops the same envelopes before classification (commit `33b9eeec`);
   scoring lives in `~/.claude-mem/state/harness-ledger.md`, row 1.
+  **Envelope-less injections (2026-08-24).** An orchestrator that injects a prompt without
+  wrapping it is indistinguishable from the user, and one such injection repeated through a
+  session was the single largest machine contributor to a review window. The list in
+  `user-prompts.ts` therefore holds SQL LIKE *patterns*, not prefixes — one source for the SQL
+  and the TS predicate, with the TS side translating LIKE to a regexp — and carries the two
+  literal shapes alongside the envelopes. A pattern matches only a prompt that is nothing but
+  the injection, so a human prompt with one appended is still the user's row. Growing this list
+  is a last resort: an injector that wraps its output in an envelope is caught by shape and
+  needs no entry. Not catchable at all: a relay a human pasted between terminals by hand, which
+  needs the marker written by the relaying agent.
 - **Reviews on disk:** `.scratches/2026-08-03-fable-harness-review-2.md`,
   `.scratches/2026-08-03-codex-harness-review.md`, `.scratches/2026-08-03-fable-task-retro.md`.
   `.scratches/` is gitignored, so these do not survive a fresh clone.

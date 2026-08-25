@@ -66,6 +66,18 @@ one fork-owned module. Rationale and measurements live in
   `validTypes.includes('change')` guard. Test: `tests/sdk/parser-type-fallback.test.ts`
   (fork-owned; runs against the real `code` mode, not a stub, because what is under test is
   the interaction between the shipped type list and the fallback).
+- **`src/sdk/parser.ts` — an off-vocabulary type is coerced to that same fallback (2026-08-24),
+  not stored as emitted.** Upstream preserved whatever the model wrote. At scale the model
+  invents a type per observation rather than picking one, and an invented type is dropped
+  silently by every consumer filtering on type while type shares stop adding up — a share
+  metric cannot be read across the onset date. The parser is the only chokepoint, so the fix
+  is there: coerce, and append the emitted string to `~/.claude-mem/state/type-coercions.jsonl`
+  through the same best-effort appender as the concept drops, so the rate stays measurable
+  without the row carrying an unusable value. Re-sync: re-apply the `validTypes.includes(type)`
+  branch. Tests: the coercion case in `tests/sdk/parser-type-fallback.test.ts`, and the
+  upstream test in `tests/sdk/parser.test.ts` that asserted preservation, inverted.
+  Not done: a backfill. Rows written before the fix keep their emitted type — rewriting them
+  would erase what the model actually said, and the onset date is the honest boundary.
 - **`AskUserQuestion` removed from the `CLAUDE_MEM_SKIP_TOOLS` default**
   (`src/shared/SettingsDefaultsManager.ts`, one line). It was dropped at ingest
   (`worker/http/shared.ts:73`), so the observer never saw it — while its result carries the
