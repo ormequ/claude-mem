@@ -1,6 +1,6 @@
 ---
 name: harness-review
-version: 2.6.0
+version: 2.6.1
 description: Measures whether the harness is getting better, across several lanes - the user's corrective prompts, facts the agent keeps re-deriving, and errors it silently worked around. Use when asked for a harness retrospective, a correction-rate check, "is the harness getting better", "did that fix help", "what keeps going wrong", or a periodic review of how the agent has been failing the user.
 allowed-tools:
   - Bash
@@ -1297,9 +1297,15 @@ risks counting impressions. Both halves have to hold:
 - **It can be written as steps that work with its author out of the loop.** A judgement made in
   flight is not a procedure — written down it comes out as a retelling of intent, and it will not
   fire for anyone else.
-- **It is visible in something the agent did not author** — a commit, an error span that ended, a
-  prompt from the owner. "The run went well" is the agent grading its own work, and it does not
-  qualify however well it reads.
+- **It is visible in something the agent did not author**, and what counts depends on which kind
+  of candidate it is. A **rule** removes a failure, so its evidence is the failure's absence:
+  a commit, an error span that ended, a prompt from the owner that stopped recurring. A
+  **procedure** — how to drive a build, a deploy, an unfamiliar console — fixes nothing and will
+  never show up that way; its evidence is the external system it drives reporting the outcome
+  (a green job, a created MR, a non-error response) plus a first reuse that did not have to
+  rewrite the steps. Holding a procedure to the rule's evidence discards every candidate of that
+  kind. "The run went well" is the agent grading its own work, and it does not qualify however
+  well it reads.
 
 **Nothing in the practitioner corpus does this, and a later run should not go hunting for a
 precedent.** Harvesting a successful procedure is missing from the systems that have been looked
