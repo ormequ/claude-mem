@@ -165,19 +165,36 @@ Or install from the plugin marketplace inside Claude Code:
 /plugin install claude-mem
 ```
 
-Or let the agent install itself — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
+Or let the agent install it — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
 
 ```text
-Install claude-mem for the harness you are running in.
+Install claude-mem from this fork (github.com/ormequ/claude-mem).
 
-1. Identify your harness. Valid ids: claude-code, opencode, openclaw, windsurf,
-   codex-cli, cursor, copilot-cli, antigravity, goose, roo-code, warp.
-2. Run: npx claude-mem install --ide <your id>
-3. Start the worker: npx claude-mem start
-4. Verify it answers: curl http://127.0.0.1:37701/api/readiness
-5. If this repo has a CLAUDE.md but no AGENTS.md, add `ln -s CLAUDE.md AGENTS.md`
+`npx claude-mem` is NOT this fork: that name on npm belongs to upstream. Install
+from a checkout, or from this fork's own plugin marketplace.
+
+1. In Claude Code, the marketplace path is enough:
+     /plugin marketplace add ormequ/claude-mem
+     /plugin install claude-mem
+
+2. For every other harness, install from a checkout:
+     git clone https://github.com/ormequ/claude-mem.git
+     cd claude-mem && npm install && npm run build
+     node dist/npx-cli/index.js install --ide <harness id>
+   Valid ids: claude-code, opencode, openclaw, windsurf, codex-cli, cursor,
+   copilot-cli, antigravity, goose, roo-code, warp.
+   Run these OUTSIDE a sandbox: the build reads node_modules and the install
+   writes under ~/.claude.
+
+3. Start the worker and check it answers:
+     node dist/npx-cli/index.js start
+     node dist/npx-cli/index.js status
+   The port is derived per user — take it from `status`, do not assume one.
+
+4. If this repo has a CLAUDE.md but no AGENTS.md, add `ln -s CLAUDE.md AGENTS.md`
    so AGENTS.md-reading harnesses (OpenCode among them) get the same instructions.
-6. Report the install path it printed, then tell me to restart the harness.
+
+5. Report the install path it printed, then tell me to restart the harness.
 ```
 
 Restart Claude Code. Context from previous sessions will automatically appear in new sessions.
