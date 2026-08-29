@@ -18,4 +18,12 @@ describe('English-output rule survives mode inheritance', () => {
       expect(mode.prompts.recording_focus).toContain(MARKER);
     });
   }
+
+  // Fork: buildSummaryPrompt never includes `recording_focus`, so the summary
+  // generator saw no language rule at all and mirrored the language of the
+  // session's last assistant message.
+  it('summary_instruction states it', () => {
+    const mode = ModeManager.getInstance().loadMode('code');
+    expect(mode.prompts.summary_instruction).toContain('Retrieval embeds English');
+  });
 });
