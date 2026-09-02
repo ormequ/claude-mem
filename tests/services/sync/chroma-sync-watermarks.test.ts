@@ -202,6 +202,24 @@ describe('ChromaSync watermark gap persistence', () => {
     expect(ChromaSyncState.get(project).observations).toBe(5);
   });
 
+  it('reconciles against Chroma even when the state file already has a head watermark', async () => {
+    // The live sync path bumps the watermark to the newest id while a backfill
+    // is still walking older rows, so a saved watermark can sit above rows that
+    // were never embedded. Reconcile has to run anyway, not just on first boot.
+    existingObservationIds = new Set([1, 3, 4, 5]);
+    ChromaSyncState.replace(project, {
+      observations: 5,
+      summaries: 0,
+      prompts: 0,
+      pending: {},
+    });
+
+    await ChromaSync.backfillAllProjects(makeStore(project, [1, 2, 3, 4, 5]));
+
+    expect(addDocumentCalls.flat()).toContain('obs_2_narrative');
+    expect(ChromaSyncState.getPending(project, 'observations')).toEqual([]);
+  });
+
   it('keeps a split observation row pending until every batch for that row lands', async () => {
     const splitRow = makeObservationRow(1, project, 101);
     ChromaSyncState.replace(project, {
@@ -213,11 +231,9 @@ describe('ChromaSync watermark gap persistence', () => {
     const sync = new ChromaSync(project) as ChromaSync & {
       addDocuments: (documents: Array<{ id: string }>) => Promise<number>;
     };
-    let callCount = 0;
     sync.addDocuments = async (documents) => {
       addDocumentCalls.push(documents.map(document => document.id));
-      callCount += 1;
-      return callCount === 2 ? 0 : documents.length;
+      return documents.length - 1;
     };
 
     await sync.ensureBackfilled(project, makeStoreFromRows(project, [splitRow]));

@@ -751,35 +751,47 @@ export class ChromaSync {
     kind: 'observations' | 'summaries' | 'prompts',
     backfillProject: string
   ): Promise<number> {
-    const rowsWithDocs = rows.map(row => ({ row, docs: formatDocs(row) }));
+    const rowsWithDocs = rows
+      .map(row => ({ row, docs: formatDocs(row) }))
+      .filter(({ docs }) => docs.length > 0);
     const totalDocs = rowsWithDocs.reduce((sum, { docs }) => sum + docs.length, 0);
     let processedDocs = 0;
 
-    for (const { row, docs } of rowsWithDocs) {
-      if (docs.length === 0) {
-        continue;
+    // Pack whole rows into one write per BATCH_SIZE documents. A row is only
+    // 3-6 documents, and a Chroma add against a large persistent collection
+    // costs about the same round-trip whether it carries 4 documents or 100 —
+    // so a row-per-call backfill of a large gap runs for days. Rows are never
+    // split across writes here, which keeps the row-atomic rule above intact: a
+    // fully written batch means every row in it is complete.
+    let batch: ChromaDocument[] = [];
+    let batchRows: T[] = [];
+
+    const flush = async (): Promise<void> => {
+      if (batch.length === 0) {
+        return;
       }
 
-      let rowComplete = true;
-      for (let i = 0; i < docs.length; i += this.BATCH_SIZE) {
-        const batch = docs.slice(i, i + this.BATCH_SIZE);
-        const writtenInBatch = await this.addDocuments(batch);
-        processedDocs += batch.length;
-        // Only advance the watermark for documents that actually landed in
-        // Chroma. addDocuments() logs and continues on per-batch failures, so a
-        // partial write must not mark unwritten docs as synced.
-        if (writtenInBatch < batch.length) {
-          ChromaSyncState.markPending(backfillProject, kind, [row.id]);
-          logger.debug('CHROMA_SYNC', 'Recorded pending watermark gap for failed/partial row batch', {
-            project: backfillProject,
-            kind,
-            rowId: row.id,
-            batchStart: i,
-            requested: batch.length,
-            written: writtenInBatch
-          });
-          rowComplete = false;
-          break;
+      const written = await this.addDocuments(batch);
+      processedDocs += batch.length;
+
+      // Only advance the watermark for documents that actually landed in
+      // Chroma. addDocuments() logs and continues on per-batch failures, so a
+      // partial write must not mark unwritten docs as synced. Which row lost
+      // which document is not reported back, so the whole batch stays pending —
+      // the retry re-adds the rows that did land, which is an in-place update.
+      if (written < batch.length) {
+        ChromaSyncState.markPending(backfillProject, kind, batchRows.map(({ id }) => id));
+        logger.debug('CHROMA_SYNC', 'Recorded pending watermark gap for failed/partial batch', {
+          project: backfillProject,
+          kind,
+          rowIds: batchRows.map(({ id }) => id),
+          requested: batch.length,
+          written
+        });
+      } else {
+        for (const { id } of batchRows) {
+          ChromaSyncState.clearPending(backfillProject, kind, [id]);
+          ChromaSyncState.bump(backfillProject, kind, id);
         }
 
         logger.debug('CHROMA_SYNC', 'Backfill progress', {
@@ -788,13 +800,26 @@ export class ChromaSync {
         });
       }
 
-      if (!rowComplete) {
-        continue;
+      batch = [];
+      batchRows = [];
+    };
+
+    for (const { row, docs } of rowsWithDocs) {
+      if (batch.length > 0 && batch.length + docs.length > this.BATCH_SIZE) {
+        await flush();
       }
 
-      ChromaSyncState.clearPending(backfillProject, kind, [row.id]);
-      ChromaSyncState.bump(backfillProject, kind, row.id);
+      batch.push(...docs);
+      batchRows.push(row);
+
+      // A single row wider than BATCH_SIZE still goes out alone; addDocuments()
+      // chunks it internally and reports one written count for the whole row.
+      if (batch.length >= this.BATCH_SIZE) {
+        await flush();
+      }
     }
+
+    await flush();
 
     return totalDocs;
   }
@@ -1085,18 +1110,23 @@ export class ChromaSync {
 
       logger.info('CHROMA_SYNC', `Backfill check for ${projects.length} projects`);
 
-      if (!ChromaSyncState.exists()) {
-        logger.info('CHROMA_SYNC', 'Watermark cache missing — bootstrapping from Chroma (one-time)');
-        for (const { project } of projects) {
-          try {
-            await sync.bootstrapWatermarksFromChroma(project, store);
-          } catch (error) {
-            logger.error('CHROMA_SYNC', `Bootstrap failed for project: ${project}`,
-              {}, error instanceof Error ? error : new Error(String(error)));
-          }
+      // Reconcile against Chroma on EVERY run, not just when the state file is
+      // missing. The watermark is a max(): the live syncObservation() path bumps
+      // it to the newest id while a backfill is still walking older rows, so it
+      // routinely sits above rows that were never embedded. `id > watermark`
+      // then skips those rows forever and nothing ever notices — the same hole
+      // opens after a Chroma wipe that leaves the state file behind. Chroma is
+      // the only source that knows what actually landed, so ask it.
+      logger.info('CHROMA_SYNC', 'Reconciling watermarks against Chroma');
+      for (const { project } of projects) {
+        try {
+          await sync.bootstrapWatermarksFromChroma(project, store);
+        } catch (error) {
+          logger.error('CHROMA_SYNC', `Bootstrap failed for project: ${project}`,
+            {}, error instanceof Error ? error : new Error(String(error)));
         }
-        logger.info('CHROMA_SYNC', 'Bootstrap complete — incremental backfills will use watermarks');
       }
+      logger.info('CHROMA_SYNC', 'Reconcile complete — backfill will fill the recorded gaps');
 
       // Process projects in chunks of BACKFILL_CONCURRENCY_LIMIT to bound
       // CPU/memory pressure from concurrent Chroma embedding operations.

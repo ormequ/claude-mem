@@ -83,10 +83,6 @@ function persist(): void {
 }
 
 export const ChromaSyncState = {
-  exists(): boolean {
-    return existsSync(statePath());
-  },
-
   get(project: string): ProjectWatermarks {
     const all = load();
     return normalizeProjectWatermarks(all[project] ?? ZERO);
