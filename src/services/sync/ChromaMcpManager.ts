@@ -695,8 +695,9 @@ export class ChromaMcpManager {
     });
 
     let result;
+    const clientAtCall = this.client;
     try {
-      result = await this.client!.callTool({
+      result = await clientAtCall!.callTool({
         name: toolName,
         arguments: toolArguments
       });
@@ -708,7 +709,17 @@ export class ChromaMcpManager {
       // Tree-kill the dying subprocess before reconnect. Previously this path
       // just nulled the handle, which on Linux leaks the uv/python/chroma-mcp
       // descendants every time a transport error happens (#2313).
-      await this.disposeCurrentSubprocess();
+      //
+      // Only tear down the subprocess THIS call was talking to. Adds and
+      // queries run concurrently against one shared connection, so a single
+      // request timeout used to kill the subprocess every other in-flight call
+      // was using; each of those then failed and killed the replacement the
+      // previous one had just spawned. The connection never settled, and a
+      // backfill run burned its whole queue against a dead pipe in a minute.
+      // A caller that finds the connection already replaced just retries on it.
+      if (this.client === clientAtCall) {
+        await this.disposeCurrentSubprocess();
+      }
 
       try {
         await this.ensureConnected();

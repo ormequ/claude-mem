@@ -99,7 +99,14 @@ export class ChromaSync {
   private project: string;
   private collectionName: string;
   private collectionCreated = false;
-  private readonly BATCH_SIZE = 100;
+  // 50 documents is roughly 20s of embedding against a large persistent
+  // collection — comfortably inside the MCP request timeout, where 100 sat
+  // right on it and tipped over whenever live sync competed for the same
+  // subprocess.
+  private readonly BATCH_SIZE = 50;
+
+  /** Consecutive writes that land nothing before a backfill run gives up. */
+  private static readonly MAX_DEAD_BATCHES = 3;
 
   constructor(project: string) {
     this.project = project;
@@ -765,6 +772,7 @@ export class ChromaSync {
     // fully written batch means every row in it is complete.
     let batch: ChromaDocument[] = [];
     let batchRows: T[] = [];
+    let deadBatches = 0;
 
     const flush = async (): Promise<void> => {
       if (batch.length === 0) {
@@ -773,6 +781,19 @@ export class ChromaSync {
 
       const written = await this.addDocuments(batch);
       processedDocs += batch.length;
+
+      // addDocuments() logs and swallows per-batch failures so one bad batch
+      // cannot stop the run — but when Chroma itself is down every batch fails
+      // instantly, and a large gap marches through thousands of rows in under a
+      // minute, marks them all pending, and reports "backfill complete". Give
+      // up after a few writes land nothing at all and let the next run retry.
+      deadBatches = written === 0 ? deadBatches + 1 : 0;
+      if (deadBatches >= ChromaSync.MAX_DEAD_BATCHES) {
+        ChromaSyncState.markPending(backfillProject, kind, batchRows.map(({ id }) => id));
+        throw new Error(
+          `Chroma wrote nothing for ${deadBatches} consecutive batches (${kind}, project ${backfillProject}) — aborting backfill`
+        );
+      }
 
       // Only advance the watermark for documents that actually landed in
       // Chroma. addDocuments() logs and continues on per-batch failures, so a
@@ -1079,6 +1100,12 @@ export class ChromaSync {
   /** Maximum number of concurrent project backfills to run at once. */
   private static readonly BACKFILL_CONCURRENCY_LIMIT = 3;
 
+  /** Passes over the failing projects before a run gives up until next start. */
+  private static readonly BACKFILL_MAX_ATTEMPTS = 12;
+
+  /** Long enough to outlast the connection backoff and a brief network outage. */
+  private static readonly BACKFILL_RETRY_DELAY_MS = 5 * 60 * 1000;
+
   /** Guard flag to prevent overlapping backfill runs from fire-and-forget callers. */
   private static backfillInProgress = false;
 
@@ -1134,25 +1161,57 @@ export class ChromaSync {
       // before starting the next one. Simple and predictable — no semaphore
       // overhead, no unbounded fan-out.
       const concurrency = ChromaSync.BACKFILL_CONCURRENCY_LIMIT;
-      for (let i = 0; i < projects.length; i += concurrency) {
-        const chunk = projects.slice(i, i + concurrency);
-        const chunkResults = await Promise.allSettled(
-          chunk.map(({ project }) => sync.ensureBackfilled(project, store))
-        );
 
-        for (let j = 0; j < chunkResults.length; j++) {
-          const result = chunkResults[j];
-          if (result.status === 'rejected') {
-            const project = chunk[j].project;
-            const error = result.reason;
-            if (error instanceof Error) {
-              logger.error('CHROMA_SYNC', `Backfill failed for project: ${project}`, {}, error);
-            } else {
-              logger.error('CHROMA_SYNC', `Backfill failed for project: ${project}`, { error: String(error) });
+      // Retry the whole pass while projects are still failing. A large gap
+      // needs hours of writes, and any single blip — a request timeout, a uvx
+      // prewarm that cannot reach the network — aborts the project it hits.
+      // Without this, backfill only runs again at the next worker start, so an
+      // unattended repair stops at the first blip and nobody notices.
+      // ponytail: fixed attempt count and delay; if the store ever needs more
+      // than this, drive the retry off whether the last pass made progress.
+      for (let attempt = 1; attempt <= ChromaSync.BACKFILL_MAX_ATTEMPTS; attempt++) {
+        const failedProjects: string[] = [];
+
+        for (let i = 0; i < projects.length; i += concurrency) {
+          const chunk = projects.slice(i, i + concurrency);
+          const chunkResults = await Promise.allSettled(
+            chunk.map(({ project }) => sync.ensureBackfilled(project, store))
+          );
+
+          for (let j = 0; j < chunkResults.length; j++) {
+            const result = chunkResults[j];
+            if (result.status === 'rejected') {
+              const project = chunk[j].project;
+              const error = result.reason;
+              failedProjects.push(project);
+              if (error instanceof Error) {
+                logger.error('CHROMA_SYNC', `Backfill failed for project: ${project}`, {}, error);
+              } else {
+                logger.error('CHROMA_SYNC', `Backfill failed for project: ${project}`, { error: String(error) });
+              }
+              // Continue to next chunk — don't let one failure stop others
             }
-            // Continue to next chunk — don't let one failure stop others
           }
         }
+
+        if (failedProjects.length === 0) {
+          break;
+        }
+
+        if (attempt === ChromaSync.BACKFILL_MAX_ATTEMPTS) {
+          logger.error('CHROMA_SYNC', 'Backfill still failing after the last attempt — giving up until the next worker start', {
+            attempt,
+            projects: failedProjects
+          });
+          break;
+        }
+
+        logger.warn('CHROMA_SYNC', 'Backfill pass had failures, retrying after a delay', {
+          attempt,
+          projects: failedProjects,
+          retryInMs: ChromaSync.BACKFILL_RETRY_DELAY_MS
+        });
+        await new Promise(resolve => setTimeout(resolve, ChromaSync.BACKFILL_RETRY_DELAY_MS));
       }
     } finally {
       ChromaSync.backfillInProgress = false;

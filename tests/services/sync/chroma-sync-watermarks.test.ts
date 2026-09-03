@@ -220,6 +220,28 @@ describe('ChromaSync watermark gap persistence', () => {
     expect(ChromaSyncState.getPending(project, 'observations')).toEqual([]);
   });
 
+  it('aborts the backfill run instead of burning the whole gap into a dead Chroma', async () => {
+    const rows = Array.from({ length: 200 }, (_, index) => index + 1);
+    ChromaSyncState.replace(project, {
+      observations: 0,
+      summaries: 0,
+      prompts: 0,
+      pending: {},
+    });
+    const sync = new ChromaSync(project) as ChromaSync & {
+      addDocuments: (documents: Array<{ id: string }>) => Promise<number>;
+    };
+    sync.addDocuments = async (documents) => {
+      addDocumentCalls.push(documents.map(document => document.id));
+      return 0;
+    };
+
+    await expect(sync.ensureBackfilled(project, makeStore(project, rows))).rejects.toThrow(/aborting backfill/);
+
+    expect(addDocumentCalls.length).toBe(3);
+    expect(ChromaSyncState.get(project).observations).toBe(0);
+  });
+
   it('keeps a split observation row pending until every batch for that row lands', async () => {
     const splitRow = makeObservationRow(1, project, 101);
     ChromaSyncState.replace(project, {
