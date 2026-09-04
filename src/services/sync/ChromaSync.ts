@@ -758,9 +758,18 @@ export class ChromaSync {
     kind: 'observations' | 'summaries' | 'prompts',
     backfillProject: string
   ): Promise<number> {
-    const rowsWithDocs = rows
-      .map(row => ({ row, docs: formatDocs(row) }))
-      .filter(({ docs }) => docs.length > 0);
+    const formatted = rows.map(row => ({ row, docs: formatDocs(row) }));
+
+    // A row that yields no documents has nothing to embed, so it is synced by
+    // definition — but it never reaches a write, and pending is only cleared on
+    // a successful write. Left alone it stays pending forever and every later
+    // run re-fetches it. Retire it here.
+    for (const { row } of formatted.filter(({ docs }) => docs.length === 0)) {
+      ChromaSyncState.clearPending(backfillProject, kind, [row.id]);
+      ChromaSyncState.bump(backfillProject, kind, row.id);
+    }
+
+    const rowsWithDocs = formatted.filter(({ docs }) => docs.length > 0);
     const totalDocs = rowsWithDocs.reduce((sum, { docs }) => sum + docs.length, 0);
     let processedDocs = 0;
 
