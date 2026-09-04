@@ -1,6 +1,8 @@
 
+import { join } from 'path';
 import { ChromaMcpManager } from './ChromaMcpManager.js';
 import { ChromaSyncState, ProjectWatermarks } from './ChromaSyncState.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { ParsedObservation, ParsedSummary } from '../../sdk/parser.js';
 // cmem-sdk: keep SessionStore + parseFileList off the SDK's import graph.
 // Both come from the SQLite layer (`bun:sqlite`). The SDK never calls the
@@ -25,6 +27,77 @@ const lazyCreateRequire = (): ((id: string) => unknown) => {
   const mod = require('module') as typeof import('module');
   return mod.createRequire(import.meta.url);
 };
+
+export interface ExistingChromaIds {
+  observations: Set<number>;
+  summaries: Set<number>;
+  prompts: Set<number>;
+}
+
+/**
+ * Read every document id Chroma holds straight out of its own SQLite file.
+ *
+ * The MCP route for this pages `chroma_get_documents` 1000 at a time behind a
+ * `where` filter, and offset pagination over a filtered set re-scans on every
+ * page — on a store of a few hundred thousand documents one project stopped
+ * finishing at all. Document ids are claude-mem's own (`obs_<id>_narrative`),
+ * so the id column alone answers the question, and the project scoping the
+ * callers need comes from claude-mem's SQLite, not from Chroma's metadata.
+ *
+ * Returns null when the file or the schema is not what we expect; callers fall
+ * back to the MCP path rather than treating an unreadable store as an empty one.
+ */
+export function readChromaDocumentIds(chromaSqlitePath: string): ExistingChromaIds | null {
+  const req = lazyCreateRequire();
+  const { existsSync } = req('fs') as typeof import('fs');
+  if (!existsSync(chromaSqlitePath)) {
+    return null;
+  }
+
+  const prefixes: Array<[string, keyof ExistingChromaIds]> = [
+    ['obs_', 'observations'],
+    ['summary_', 'summaries'],
+    ['prompt_', 'prompts'],
+  ];
+
+  try {
+    const { Database } = req('bun:sqlite') as typeof import('bun:sqlite');
+    const db = new Database(chromaSqlitePath, { readonly: true });
+    try {
+      const rows = db.prepare('SELECT embedding_id FROM embeddings').all() as Array<{ embedding_id: string }>;
+      const ids: ExistingChromaIds = {
+        observations: new Set<number>(),
+        summaries: new Set<number>(),
+        prompts: new Set<number>(),
+      };
+
+      for (const { embedding_id } of rows) {
+        for (const [prefix, kind] of prefixes) {
+          if (!embedding_id.startsWith(prefix)) {
+            continue;
+          }
+          const rest = embedding_id.slice(prefix.length);
+          const separator = rest.indexOf('_');
+          const parsed = Number.parseInt(separator === -1 ? rest : rest.slice(0, separator), 10);
+          if (Number.isInteger(parsed) && parsed > 0) {
+            ids[kind].add(parsed);
+          }
+          break;
+        }
+      }
+
+      return ids;
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    logger.warn('CHROMA_SYNC', 'Could not read Chroma document ids from its SQLite file, falling back to MCP paging', {
+      chromaSqlitePath,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
 
 let _filesHelper: typeof SqliteFilesModule | undefined;
 function loadFilesHelper(): typeof SqliteFilesModule {
@@ -593,11 +666,18 @@ export class ChromaSync {
     return [...merged.values()].sort((a, b) => a.id - b.id);
   }
 
+  /**
+   * `sourceIds` is this project's rows in ascending id order; `existingIds` is
+   * what Chroma holds. The watermark is the project's own highest embedded row,
+   * so it is derived from the intersection — `existingIds` may cover every
+   * project when it was read from Chroma's SQLite in one pass.
+   */
   private summarizeBootstrapPending(
     sourceIds: number[],
     existingIds: Set<number>
   ): { watermark: number; pending: number[] } {
-    const watermark = existingIds.size ? Math.max(...existingIds) : 0;
+    const present = sourceIds.filter(id => existingIds.has(id));
+    const watermark = present.length > 0 ? present[present.length - 1] : 0;
     return {
       watermark,
       pending: sourceIds.filter(id => id <= watermark && !existingIds.has(id)),
@@ -670,8 +750,12 @@ export class ChromaSync {
     return { observations: observationIds, summaries: summaryIds, prompts: promptIds };
   }
 
-  async bootstrapWatermarksFromChroma(project: string, store: SessionStore): Promise<void> {
-    const existing = await this.getExistingChromaIds(project);
+  async bootstrapWatermarksFromChroma(
+    project: string,
+    store: SessionStore,
+    knownExistingIds?: ExistingChromaIds
+  ): Promise<void> {
+    const existing = knownExistingIds ?? await this.getExistingChromaIds(project);
     const observationIds = store.db.prepare(`
       SELECT id
       FROM observations
@@ -1153,10 +1237,25 @@ export class ChromaSync {
       // then skips those rows forever and nothing ever notices — the same hole
       // opens after a Chroma wipe that leaves the state file behind. Chroma is
       // the only source that knows what actually landed, so ask it.
-      logger.info('CHROMA_SYNC', 'Reconciling watermarks against Chroma');
+      const chromaSqlitePath = join(
+        SettingsDefaultsManager.get('CLAUDE_MEM_DATA_DIR'),
+        'chroma',
+        'chroma.sqlite3'
+      );
+      const existingIds = readChromaDocumentIds(chromaSqlitePath);
+      logger.info('CHROMA_SYNC', 'Reconciling watermarks against Chroma', {
+        source: existingIds ? 'chroma sqlite' : 'chroma-mcp paging',
+        ...(existingIds
+          ? {
+              observations: existingIds.observations.size,
+              summaries: existingIds.summaries.size,
+              prompts: existingIds.prompts.size
+            }
+          : {})
+      });
       for (const { project } of projects) {
         try {
-          await sync.bootstrapWatermarksFromChroma(project, store);
+          await sync.bootstrapWatermarksFromChroma(project, store, existingIds ?? undefined);
         } catch (error) {
           logger.error('CHROMA_SYNC', `Bootstrap failed for project: ${project}`,
             {}, error instanceof Error ? error : new Error(String(error)));
