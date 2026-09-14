@@ -40,6 +40,7 @@ import {
   type ServerRuntimeContext,
 } from '../services/hooks/runtime-selector.js';
 import { normalizePlatformSource } from '../shared/platform-source.js';
+import { normalizeMemoryIds } from '../utils/memory-ids.js';
 import { getAdvertisedMcpToolsForRuntime } from './mcp-tool-visibility.js';
 
 let mcpServerDirResolutionFailed = false;
@@ -540,7 +541,10 @@ NEVER fetch full details without filtering first. 10x token savings.`,
     inputSchema: {
       type: 'object',
       properties: {
-        anchor: { type: 'number', description: 'Observation ID to center the timeline around' },
+        anchor: {
+          oneOf: [{ type: 'number' }, { type: 'string' }],
+          description: 'What to center the timeline around: an observation ID (number), a session id as "S1234", or an ISO timestamp'
+        },
         query: { type: 'string', description: 'Query to find anchor automatically. MUST be in English — non-English queries return unrelated results. Keep identifiers (paths, ticket ids, error strings) verbatim.' },
         depth_before: { type: 'number', description: 'Items before anchor (default 3)' },
         depth_after: { type: 'number', description: 'Items after anchor (default 3)' },
@@ -554,21 +558,22 @@ NEVER fetch full details without filtering first. 10x token savings.`,
   },
   {
     name: 'get_observations',
-    description: 'Step 3: Fetch full details for filtered IDs. Params: ids (array of observation IDs, required), orderBy, limit, project',
+    description: 'Step 3: Fetch full details for filtered IDs. Observation IDs are bare numbers — S#### rows are sessions (use timeline anchor "S123") and P#### are prompts (use get_prompts); those id ranges overlap with observation ids, so never strip the prefix. Params: ids (array of observation IDs, required), orderBy, limit, project',
     inputSchema: {
       type: 'object',
       properties: {
         ids: {
           type: 'array',
-          items: { type: 'number' },
-          description: 'Array of observation IDs to fetch (required)'
+          items: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+          description: 'Array of observation IDs to fetch (required). Bare numbers only — an S#### session id or P#### prompt id is rejected, not silently resolved.'
         }
       },
       required: ['ids'],
       additionalProperties: true
     },
     handler: async (args: any) => {
-      return await callWorker('/api/observations/batch', { body: args });
+      const ids = normalizeMemoryIds(args?.ids ?? [], 'observation');
+      return await callWorker('/api/observations/batch', { body: { ...args, ids } });
     }
   },
   {
@@ -581,15 +586,16 @@ NEVER fetch full details without filtering first. 10x token savings.`,
       properties: {
         ids: {
           type: 'array',
-          items: { type: 'number' },
-          description: 'Array of prompt IDs to fetch (the numeric part of #P1234), required'
+          items: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+          description: 'Array of prompt IDs to fetch — "P1234" or the bare number 1234, required. An S#### session id is rejected, not silently resolved.'
         }
       },
       required: ['ids'],
       additionalProperties: true
     },
     handler: async (args: any) => {
-      return await callWorker('/api/prompts/batch', { body: args });
+      const ids = normalizeMemoryIds(args?.ids ?? [], 'prompt');
+      return await callWorker('/api/prompts/batch', { body: { ...args, ids } });
     }
   },
   {

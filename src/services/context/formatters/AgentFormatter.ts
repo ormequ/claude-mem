@@ -35,7 +35,10 @@ export function renderAgentLegend(): string[] {
   return [
     `Legend: 🎯session ${typeLegendItems}`,
     `Format: ID TIME TYPE TITLE`,
-    `Fetch details: get_observations([IDs]) | Search: mem-search skill`,
+    // fork: S#### and bare observation ids share one numeric range, so a
+    // stripped prefix fetches an unrelated row that looks right (see
+    // src/utils/memory-ids.ts). Say which id goes where, in the legend.
+    `Fetch details: get_observations([IDs]) — bare numeric ids only | Sessions (S####): timeline({anchor:"S123"}), never get_observations | Search: mem-search skill`,
     ''
   ];
 }
@@ -151,7 +154,7 @@ export function renderAgentFooter(totalDiscoveryTokens: number, totalReadTokens:
   const workTokensK = Math.round(totalDiscoveryTokens / 1000);
   return [
     '',
-    `Access ${workTokensK}k tokens of past work via get_observations([IDs]) or mem-search skill.`
+    `Access ${workTokensK}k tokens of past work via get_observations([IDs]) — numeric ids, not the S#### session rows — or the mem-search skill.`
   ];
 }
 
