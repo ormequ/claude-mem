@@ -2,17 +2,15 @@
 
 ## Fork deltas
 
-- The `PreToolUse:Read` per-file context path also honors the `adopt` soft-merge
-  pointer, and no longer suppresses on mtime. The `by-file` lookup
-  (`getObservationsByFilePath`) matches `project IN (…) OR merged_into_project IN (…)`
-  (mirroring inject/search), so worktree feature-work merged into the parent is
-  visible when the file is Read from the main checkout — previously it was scoped
-  to the raw `project` slug only and silently missed. The `#1719` mtime gate
-  switched from suppress to annotate: observations older than the file's last edit
-  are surfaced with a `⚠ may be stale` marker instead of being hidden (a merge or
-  checkout bumps the working file's mtime past every worktree observation, which
-  had been silencing exactly the merged feature-work). See
-  `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
+- The `#1719` mtime gate switched from suppress to annotate: observations older
+  than the file's last edit are surfaced with a `⚠ may be stale` marker instead of
+  being hidden (a merge or checkout bumps the working file's mtime past every
+  worktree observation, which had been silencing exactly the merged feature-work).
+  See `docs/bug-fixes/2026-07-11-read-hook-delivery-reliability.md`.
+  **Dropped at the v13.35 merge:** the by-file `merged_into_project` scoping
+  (`getObservationsByFilePath` matching `project IN (…) OR merged_into_project IN (…)`)
+  — upstream now does the same via `projectScopeSql(…, { includeMerged: true })` in
+  `src/services/sqlite/observations/get.ts`.
 - `PreToolUse:Read` ranking: the **scoring** in `deduplicateObservations`
   (`src/cli/handlers/file-context.ts`) is **pure upstream specificity** —
   in-modified-file and total-files-touched, sorted descending, capped at 15.
@@ -58,10 +56,53 @@
   the `get_observations` hint. The per-injection `codegraph`/`smart_outline`
   hint is gone — transcript audit showed such hints are almost never acted on,
   and the global CLAUDE.md already mandates codegraph-first in indexed repos.
+  The File Read Gate's deny reason (below) keeps upstream's `smart_outline` /
+  `smart_unfold` routing text: there the hint is the point of the deny.
 
-## Upstream baseline: `PreToolUse:Read` behavior (verified 2026-07-14)
+## File Read Gate (upstream, restored in v13.35) — OFF by default in the fork
 
-Recorded to stop a recurring misread (the public doc is stale). `origin/upstream` is
+Upstream reversed the allow-only baseline recorded further down: v13.35 ships a
+File Read Gate, default ON upstream. The fork keeps the feature and defaults it OFF
+(`CLAUDE_MEM_FILE_READ_GATE_ENABLED: 'false'` in `SettingsDefaultsManager.ts`). Off,
+the hook behaves as the old allow mode: it never denies and returns the timeline as
+`additionalContext` — now with no `permissionDecision` at all (upstream dropped
+`'allow'` because on a synchronous hook it skipped the user's permission prompt).
+
+What the gate does when ON (`shouldDenyFullFileRead`, `file-context.ts`): it denies a
+Read only when ALL hold — Claude Code main session (not a subagent, Qwen Code, codex
+or kimi); a single `file_path` Read starting at line 1 that would return the whole
+file (no `limit`, or a `limit` ≥ the file's line count); a stat'ed file ≥ 32 KB in a
+language `smart_outline` parses (not unknown/markdown/yaml/toml); inside the
+workspace by the smart tools' own containment rule; tree-sitter CLI present; and the
+file has observation history. The deny reason carries the timeline and routes to
+`smart_outline` / `smart_unfold`, `get_observations`, or a targeted `Read`. Upstream's
+eval: on a 19 KB file −6% (Sonnet) / +20% (Opus) cost, on a 49 KB file −35% / −32% —
+hence the 32 KB floor.
+
+Against the two objections that got deny rejected before (input for the owner's
+decision; not re-measured in the fork):
+
+- **Read-before-Edit.** A denied Read still does not register the file. The gate
+  never denies a *targeted* Read (offset > 1, or a limit shorter than the file), and
+  the deny text tells the agent to Read the needed lines with offset/limit before an
+  Edit; a partial Read registers the file. So Edit works, at the cost of one extra
+  turn the agent has to take — a workaround, not a removal of the objection.
+- **Fresh observations hidden on retry.** The old gate allowed the second whole-file
+  Read and skipped the timeline on it. The new one denies every whole-file Read of a
+  gated file (no free retry), puts the timeline in the deny reason, and the #3480
+  per-session claim re-injects only once a newer observation lands, so a fresh
+  observation reaches the next Read.
+
+Fork delta on the gate (matters only when ON): the fork shows a stale-marked
+timeline for a file edited since its newest observation, where upstream returned
+nothing there and so could never deny. `editedSinceNewestObservation` (content time
+from `file-staleness.ts` ≥ newest observation) keeps that precondition — such a
+Read is never denied. Test: "does not deny a file edited since its newest
+observation" in `tests/hooks/file-context.test.ts`.
+
+## Pre-v13.35 upstream baseline: `PreToolUse:Read` behavior (verified 2026-07-14, historical)
+
+Recorded to stop a recurring misread (the public doc was stale). `origin/upstream` is
 treated as the upstream mirror here — it carries 0 fork commits (all of its
 history is authored upstream); fork changes live on `main`.
 
@@ -83,9 +124,8 @@ history is authored upstream); fork changes live on `main`.
     invariant either — only the built-in Read tool registers a file.
   So deny is settled-rejected upstream: (a) hides fresh observations on retry,
   (b) breaks Edit. Re-adopting it re-introduces both.
-- ⚠ **`docs/public/file-read-gate.mdx` is STALE.** It still documents the
-  abandoned deny/block behavior ("blocks the read and instead shows a compact
-  timeline"). Do not treat it as current; the code is allow-mode.
-- The fork's deltas on this hook (mtime→annotate, git-content staleness,
-  `merged_into_project` by-file scoping, header trim — all above) never touch
-  the allow/deny decision. Keep it that way.
+- `docs/public/file-read-gate.mdx` was stale then; since v13.35 it documents the
+  restored gate again (with upstream's default ON — the fork's default is OFF).
+- The fork's deltas on this hook (mtime→annotate, git-content staleness, title
+  dedup, header trim — all above) only ever make the deny decision stricter (the
+  edited-since guard). Keep it that way.

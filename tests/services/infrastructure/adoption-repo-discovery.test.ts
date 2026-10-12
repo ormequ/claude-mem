@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { SessionStore } from '../../../src/services/sqlite/SessionStore.js';
 import { mkdtempSync, realpathSync, rmSync } from 'fs';
 import { spawnSync } from 'child_process';
 import os from 'os';
@@ -77,28 +77,12 @@ function makeRepoWithMergedWorktree(): { mainRepo: string; worktree: string } {
 }
 
 /**
- * A data dir whose DB carries the tables adoption probes, with
- * pending_messages deliberately EMPTY.
+ * A data dir with the real schema and no rows: sdk_sessions records no cwd and
+ * pending_messages is EMPTY, so only the durable registry can name a repo.
  */
 function makeDataDir(): string {
   const dataDir = makeTemp('data');
-  const db = new Database(path.join(dataDir, 'claude-mem.db'));
-  db.run(`CREATE TABLE pending_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cwd TEXT,
-    status TEXT
-  )`);
-  db.run(`CREATE TABLE observations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project TEXT,
-    merged_into_project TEXT
-  )`);
-  db.run(`CREATE TABLE session_summaries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project TEXT,
-    merged_into_project TEXT
-  )`);
-  db.close();
+  new SessionStore(path.join(dataDir, 'claude-mem.db')).close();
   return dataDir;
 }
 

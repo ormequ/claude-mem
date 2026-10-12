@@ -73,3 +73,47 @@ Chosen defaults that differ from upstream, and the env vars that change them.
   developer-only red that reads as a real break. Bit
   `skill-selection.test.ts` first and `opencode-installer.test.ts` again on
   2026-07-17.
+
+## The installer never needs a cmem.ai account
+
+Upstream (after v13.12.4) made a browser sign-in mandatory, delivered a
+"universal memory key" through it, pre-selected the CMEM Pro trial in the
+provider menu, sent a numbers-only usage summary with the sign-in request, and
+printed a deferred sign-in link plus a trial pitch at the end of every install.
+The fork strips all of it at the call sites in `src/npx-cli/commands/install.ts`
+and leaves upstream's OAuth/trial modules in place (smaller merge surface):
+
+- `CMEM_ACCOUNT_LOGIN_ENABLED = false` adds an `else if` before the
+  `providerNeedsAccount` login branch and gates `offerDeferredLogin`. With no
+  pairing, the usage summary is never sent (it is still read and shown locally).
+- The interactive menu offers `openai-compatible` (default), `openrouter`,
+  `gemini`, `claude` — no `cmem` row. `codex` / `host` stay flag-only.
+- `openai-compatible` gets an installer flow (`configureOpenAICompatible`):
+  at a TTY it asks for base URL, model and key; a non-TTY run saves the provider
+  and warns which `CLAUDE_MEM_OPENAI_COMPAT_*` keys are missing. Upstream throws
+  there ("configured in settings.json, not by the installer").
+- A non-interactive run with no provider and nothing persisted defaults to
+  `openai-compatible` (upstream: `claude`, i.e. the subscription bills every
+  observation) and completes. Explicit or persisted `gemini`/`openrouter`
+  without a key still abort, as upstream does — never asking the agent for one.
+- The last screen drops the trial pitch and the "cmem.ai is contacted once"
+  sentence. `installer-provider-choice.ts` no longer defaults grok-bot to CMEM Pro.
+- `tests/npx-cli/fork-no-cmem-account.test.ts` pins these gates; upstream's
+  funnel tests (`codex-install-funnel`, `grok-bot-install-default`) carry
+  one-line fork edits.
+
+The trial pitch is off everywhere else too: `PRO_TRIAL_PROMO_ENABLED = false` in
+`src/shared/pro-promo.ts` makes `proTrialLine()` return '' (session-start
+banner, welcome hint), and its mirror in `src/ui/viewer/constants/promo.ts`
+hides the viewer header CTA. Only the cmem-gateway fallback notice still links
+to cmem.ai, and that fires only for a configured gateway account. Telemetry and
+PostHog in the worker and CLI go through `resolveTelemetryConsent`, which is off
+by default.
+
+## OpenCode skills
+
+The OpenCode installer also installs the selected skill set into
+`~/.config/opencode/skills/claude-mem` (fork-only `installOpenCodeSkills`).
+The fork's AGENTS.md "runtime memory primer" was dropped at the v13.35.0 merge:
+upstream now injects each project's memory through the plugin and strips the
+old global AGENTS.md block on install.

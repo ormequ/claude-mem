@@ -28,6 +28,16 @@
   and `security_note` still drop, they are simply not in it.
   Upstream's #3379 colon truncation runs first (parse boundary), so
   `gotcha: WASM quirk` → `gotcha` → kept; the two compose in that order.
+  Since v13.35 upstream salvages a block whose fields are all empty (#3461: the
+  model drifted to `<kind>`/`<detail>`) as prose narrative instead of skipping it;
+  that emptiness check uses the *filtered* concepts (as the fork's skip did), so a
+  block whose only content was off-vocabulary concepts goes to the salvage path and
+  is still skipped when no stray prose remains.
+- `extractArrayElements` (parser.ts) tolerates a container closed with the
+  singular element name (`<concepts>` … `</concept>`): when `</concepts>` is
+  missing it reads up to the first tag that is neither the element nor its close,
+  instead of dropping every element. Upstream only made the container match
+  case-insensitive (v13.35); the fork's scan keeps that, also case-insensitive.
 - `plugin/modes/code.json` concept discipline (2026-07-15): `concept_guidance`
   switched to sparse tagging (0-2 concepts, only central, empty valid, anti-topic
   block), a `deliberate-decision` concept was added (strict criteria: explicit
@@ -58,6 +68,15 @@ one fork-owned module. Rationale and measurements live in
   "where decisions appear" block were added. `recording_focus` gained: the answer rather than
   the route, abandoned approaches, user-confirmed choices, and a LANGUAGE section. Bump
   `version` on any further prompt edit — it is what the `prompt_version` tag records.
+- **`code.json` 1.1.0 → 1.2.0 at the v13.35 merge** — upstream's prompt changes taken
+  on top of the fork text: the `sensitive` type (11 types now; consumed by the
+  Telegram trigger types and corpus filters), the SILENT BY DESIGN / NO CONTACT
+  paragraphs in `observer_role`, the "check your own prior messages" dedup paragraph
+  in `recording_focus` (placed before LANGUAGE), the already-recorded skip bullet
+  replacing "Repetitive operations", the `<skip_summary reason="noise" />` skip reply
+  instead of an empty response, and `continuation_instruction` "structure above".
+  The fork's types, guidance, LANGUAGE blocks (`recording_focus` and
+  `summary_instruction`) and the blindness paragraph in `skip_guidance` are unchanged.
 - **`src/sdk/parser.ts` — the type fallback is `change`, not `validTypes[0]`.** One line.
   `validTypes[0]` is `bugfix` in the code mode, so every observation the model emitted
   without a `<type>` was stored as a bug fix: all 78 empty-title rows in the store are
@@ -90,7 +109,8 @@ one fork-owned module. Rationale and measurements live in
   Russian query lands in a region where texts are similar by script rather than meaning and
   returns confident, unrelated results — an all-English corpus does not fix that, because the
   *query* is what degenerates. Two read-side deltas: `plugin/skills/mem-search/SKILL.md`
-  gained a "Query in English, always" section, and the `query` param description of the MCP
+  gained a "Query in English, always" section (re-applied onto upstream's v13.35 rewrite
+  of the skill, before the guided flow, with `mem_search(...)` examples), and the `query` param description of the MCP
   `search` tool (`src/servers/mcp-server.ts`) says the same. Write side is the LANGUAGE block
   in `code.json`. This is what cancels the expensive DEC-06 remedies (multilingual embedder
   via ollama, re-embedding ~26k rows, a third runtime dependency) — do not re-open them
@@ -130,7 +150,9 @@ one fork-owned module. Rationale and measurements live in
   disqualifying. 734 rows were unreachable when this shipped, 674 of them in ACME, 17 of the
   last 200 ACME rows. NULL / `''` / `'[]'` now pass; an off-vocabulary tag is still excluded,
   so this does not widen the vocabulary. Re-sync: re-apply the `IS NULL OR trim(...) IN`
-  branch. Test: `tests/context/observation-compiler.test.ts` (the same file that guards the
+  branch (since v13.35 it is the `emptyConceptsPass` option of `queryObservationsNewest`,
+  set only by `queryObservationsMulti`; upstream's Grok Bot seat feed keeps the strict
+  filter, where concept-less manual saves enter only with `includeManualSaves`). Test: `tests/context/observation-compiler.test.ts` (the same file that guards the
   cross-harness read delta).
 - **DEC-09 was NOT implemented as specified, deliberately.** It asked for write-time
   suppression of the observer's false "no prior context found" records. Measured 2026-08-03:

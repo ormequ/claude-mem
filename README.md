@@ -11,16 +11,20 @@
   <br>
   <a href="https://github.com/thedotmack/claude-mem">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/thedotmack/claude-mem/main/docs/public/claude-mem-logo-for-dark-mode.webp">
-      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/thedotmack/claude-mem/main/docs/public/claude-mem-logo-for-light-mode.webp">
-      <img src="https://raw.githubusercontent.com/thedotmack/claude-mem/main/docs/public/claude-mem-logo-for-light-mode.webp" alt="Claude-Mem" width="400">
+      <source media="(prefers-color-scheme: dark)" srcset="docs/public/claude-mem-logo-for-dark-mode.webp">
+      <source media="(prefers-color-scheme: light)" srcset="docs/public/claude-mem-logo-for-light-mode.webp">
+      <img src="docs/public/claude-mem-logo-for-light-mode.webp" alt="Claude-Mem" width="400">
     </picture>
   </a>
-  <br>
-  <a href="https://vercel.com/open-source-program">
-    <img alt="Vercel OSS Program" src="https://vercel.com/oss/program-badge-2026.svg" />
-  </a>
 </h1>
+
+<p align="center">
+  <img alt="Vercel OSS Program" src="https://vercel.com/oss/program-badge-2026.svg" height="24" />
+  &nbsp;&nbsp;&nbsp;
+  <img alt="Greptile" src="docs/public/greptile-wordmark-green.svg" height="24" />
+  &nbsp;&nbsp;&nbsp;
+  <img alt="SerpApi" src="docs/public/serpapi-logo-with-wordmark-gradient.svg" height="24" />
+</p>
 
 <p align="center">
   <a href="docs/i18n/README.zh.md">🇨🇳 中文</a> •
@@ -64,7 +68,7 @@
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License">
   </a>
   <a href="package.json">
-    <img src="https://img.shields.io/badge/version-13.4.0-green.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-13.35.0-green.svg" alt="Version">
   </a>
   <a href="package.json">
     <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg" alt="Node">
@@ -161,7 +165,8 @@ node dist/npx-cli/index.js install --ide opencode
 ```
 
 Valid `--ide` values: `claude-code`, `opencode`, `openclaw`, `windsurf`, `codex-cli`,
-`cursor`, `copilot-cli`, `antigravity`, `goose`, `roo-code`, `warp`. Run all of this
+`cursor`, `grok-bot`, `omp`, `pi`, `dsh`, `t3code`, `kimi`, `copilot-cli`, `antigravity`,
+`goose`, `roo-code`, `warp`. OpenCode needs 1.3.4 or later (OpenCode 2 included). Run all of this
 outside a sandbox — the build reads `node_modules` and the install writes under `~/.claude`.
 
 `--ide claude-code` copies the plugin into `~/.claude/plugins/` and registers it, so the
@@ -180,17 +185,22 @@ To update later, pull and repeat the build and the `install --ide` lines:
 cd ~/.claude-mem/installation && git pull && npm install && npm run build
 ```
 
-Installs default to the OpenAI-compatible OpenRouter provider, and **the installer never
-asks for your API key** — put it in `~/.claude-mem/settings.json` yourself:
+Installs default to the `openai-compatible` provider (any endpoint that speaks
+`/chat/completions`). Run in a terminal, the installer asks you for the endpoint, model and
+key; run by an agent (no TTY), it **never takes a key** — it saves the provider and you put
+the rest in `~/.claude-mem/settings.json` yourself:
 
 ```json
 {
-  "CLAUDE_MEM_PROVIDER": "openrouter",
-  "CLAUDE_MEM_OPENROUTER_API_KEY": "<your key>"
+  "CLAUDE_MEM_PROVIDER": "openai-compatible",
+  "CLAUDE_MEM_OPENAI_COMPAT_BASE_URL": "https://your-gateway/v1",
+  "CLAUDE_MEM_OPENAI_COMPAT_MODEL": "<model id>",
+  "CLAUDE_MEM_OPENAI_COMPAT_API_KEY": "<your key>"
 }
 ```
 
-Memory capture stays idle until that key is present.
+Memory capture stays idle until the key is present. The installer never signs in to
+cmem.ai, never offers the CMEM Pro trial, and telemetry stays off unless you opt in.
 
 Or let the agent do it — paste this prompt into OpenCode, Claude Code, Codex, Cursor, or any other supported harness:
 
@@ -208,7 +218,8 @@ fork is not on npm, so it installs from a checkout — including for Claude Code
 2. Install for the harness you are running in:
      node dist/npx-cli/index.js install --ide <harness id>
    Valid ids: claude-code, opencode, openclaw, windsurf, codex-cli, cursor,
-   copilot-cli, antigravity, goose, roo-code, warp.
+   grok-bot, omp, pi, dsh, t3code, kimi, copilot-cli, antigravity, goose,
+   roo-code, warp.
    Run these OUTSIDE a sandbox: the build reads node_modules and the install
    writes under ~/.claude.
 
@@ -389,6 +400,8 @@ Make sure Node.js and npm are installed and added to your PATH. Download the lat
 ## Configuration
 
 Settings are managed in `~/.claude-mem/settings.json` (auto-created with defaults on first run). Configure AI model, worker port, data directory, log level, and context injection settings.
+
+To include observations from every harness in Claude Code and Codex SessionStart context, set `"CLAUDE_MEM_SESSION_START_INCLUDE_ALL_SOURCES": "true"` in that file, or enable **Include all sources at session start** in the viewer settings. The default is `"false"`, which limits startup context to the current harness. The observation count limit still applies across the selected sources.
 
 See the **[Configuration Guide](https://docs.claude-mem.ai/configuration)** for all available settings and examples.
 

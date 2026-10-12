@@ -4,6 +4,7 @@ const { execSync } = require('child_process');
 const { existsSync, readFileSync, readdirSync, rmSync, statSync, copyFileSync } = require('fs');
 const path = require('path');
 const os = require('os');
+const { mirrorDirectory } = require('./mirror-dir.cjs');
 
 // Duplicated from SkillSelection.ts because this is a .cjs script and that is TS with no
 // per-file build artifact to require. `tests/integration/skill-selection.test.ts` parses these
@@ -76,6 +77,15 @@ function filterSkills(skillsDir) {
 const INSTALLED_PATH = path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'ormequ');
 const CACHE_BASE_PATH = path.join(os.homedir(), '.claude', 'plugins', 'cache', 'ormequ', 'claude-mem');
 
+const BASE_EXCLUDES = [
+  '.git',
+  'bun.lock',
+  'package-lock.json',
+  'scripts/package.json',
+  'scripts/node_modules',
+  '/workers',
+];
+
 function getCurrentBranch() {
   try {
     if (!existsSync(path.join(INSTALLED_PATH, '.git'))) {
@@ -93,7 +103,7 @@ function getCurrentBranch() {
 
 function getGitignoreExcludes(basePath) {
   const gitignorePath = path.join(basePath, '.gitignore');
-  if (!existsSync(gitignorePath)) return '';
+  if (!existsSync(gitignorePath)) return [];
 
   const syncManagedFiles = new Set();
 
@@ -105,25 +115,25 @@ function getGitignoreExcludes(basePath) {
       !line.startsWith('#') &&
       !line.startsWith('!') &&
       !syncManagedFiles.has(line)
-    )
-    .map(pattern => `--exclude=${JSON.stringify(pattern)}`)
-    .join(' ');
+    );
 }
 
-const branch = getCurrentBranch();
-const isForce = process.argv.includes('--force');
+function getMarketplaceExcludes(rootDir) {
+  return [...BASE_EXCLUDES, ...getGitignoreExcludes(rootDir)];
+}
 
-if (branch && branch !== 'main' && !isForce) {
-  console.log('');
-  console.log('\x1b[33m%s\x1b[0m', `WARNING: Installed plugin is on beta branch: ${branch}`);
-  console.log('\x1b[33m%s\x1b[0m', 'Running rsync would overwrite beta code.');
-  console.log('');
-  console.log('Options:');
-  console.log('  1. Use the claude-mem UI on the configured worker port to update beta');
-  console.log('  2. Switch to stable in UI first, then run sync');
-  console.log('  3. Force rsync: npm run sync-marketplace:force');
-  console.log('');
-  process.exit(1);
+function mirrorMarketplace(rootDir, installedPath) {
+  const exclude = getMarketplaceExcludes(rootDir);
+  const stats = mirrorDirectory(rootDir, installedPath, { exclude });
+  // These release bundles are generated under ignored directories. Sync only
+  // their explicit subtrees, keeping the rest of dist and ignored data excluded.
+  for (const relativePath of ['dist/pi-extension', 'dsh/lib']) {
+    const source = path.join(rootDir, relativePath);
+    if (!existsSync(source)) continue;
+    const bundle = mirrorDirectory(source, path.join(installedPath, relativePath), { exclude });
+    for (const key of ['copied', 'metadata', 'deleted']) stats[key] += bundle[key];
+  }
+  return stats;
 }
 
 function getPluginVersion() {
@@ -181,9 +191,8 @@ function detectInstalledVersion(buildVersion) {
 
 // The dir Claude Code is PINNED to (installed_plugins.json), which is not necessarily the
 // build's own dir nor the running worker's: Claude Code installs from the marketplace repo's
-// default branch and repins on refresh (FORK_NOTES → "Branch layout and the marketplace-pin
-// trap"). getActiveCacheVersion() can't catch it — it keys off a version mismatch, and a
-// once-repaired pinned dir reports the fork version while its code and skills rot.
+// default branch and repins on refresh (fork-notes/branch-layout.md). getActiveCacheVersion()
+// can't catch it — it keys off a version mismatch, and a once-repaired pinned dir reports the fork version while its code and skills rot.
 function getPinnedCacheVersion() {
   const manifest = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
   if (!existsSync(manifest)) return null;
@@ -208,8 +217,7 @@ function getActiveCacheVersion(installedPath) {
   return path.basename(cachePath);
 }
 
-const installedMismatch = detectInstalledVersion(getPluginVersion());
-if (installedMismatch) {
+function reportInstalledMismatch(installedMismatch) {
   console.log('');
   console.log('\x1b[33m%s\x1b[0m', 'Version mismatch detected:');
   console.log(`  Building:   ${getPluginVersion()}`);
@@ -224,82 +232,104 @@ if (installedMismatch) {
   console.log('\x1b[36m%s\x1b[0m', `and restart Claude Code so it loads the ${getPluginVersion()} cache dir.`);
   console.log('');
 }
-console.log('Syncing to marketplace...');
-try {
-  const rootDir = path.join(__dirname, '..');
-  resolveAllowedSkills(path.join(rootDir, 'plugin', 'skills'));
-  const gitignoreExcludes = getGitignoreExcludes(rootDir);
 
-  execSync(
-    `rsync -av --delete --exclude=.git --exclude=bun.lock --exclude=package-lock.json --exclude=scripts/package.json --exclude=scripts/node_modules --exclude=/workers ${gitignoreExcludes} ./ ~/.claude/plugins/marketplaces/ormequ/`,
-    { stdio: 'inherit' }
-  );
+function main() {
+  const branch = getCurrentBranch();
+  const isForce = process.argv.includes('--force');
 
-  console.log('Running bun install in marketplace...');
-  // --ignore-scripts: the marketplace root resolves the repo's tree-sitter dev deps,
-  // and tree-sitter-cli's install script downloads a binary from the GitHub release
-  // CDN — blocked here. Without the flag the install fails and aborts the sync BEFORE
-  // filterSkills(), silently leaving all 18 skills installed (FORK_NOTES).
-  execSync(
-    'cd ~/.claude/plugins/marketplaces/ormequ/ && bun install --ignore-scripts',
-    { stdio: 'inherit' }
-  );
-
-  const version = getPluginVersion();
-  // Claude Code normalizes semver build-metadata '+' to '-' in the cache dir name,
-  // so the canonical loaded dir uses '-'. But installed_plugins.json has been seen
-  // in the wild with the raw '+' installPath (cache-shadowing gotcha) — the '+' dir
-  // is then the one Claude actually loads. Target the normalized dir always, plus
-  // the raw '+' dir when it already exists on disk (i.e. some install points at it).
-  // We don't create a '+' dir that doesn't exist, to avoid minting phantoms.
-  const cacheVersionNames = new Set([version.replace(/\+/g, '-')]);
-  if (existsSync(path.join(CACHE_BASE_PATH, version))) {
-    cacheVersionNames.add(version);
-  }
-  const activeCacheVersion = getActiveCacheVersion(installedMismatch?.installedPath);
-  if (activeCacheVersion) {
-    cacheVersionNames.add(activeCacheVersion);
-  }
-  const pinnedCacheVersion = getPinnedCacheVersion();
-  if (pinnedCacheVersion) {
-    cacheVersionNames.add(pinnedCacheVersion);
+  if (branch && branch !== 'main' && !isForce) {
+    console.log('');
+    console.log('\x1b[33m%s\x1b[0m', `WARNING: Installed plugin is on beta branch: ${branch}`);
+    console.log('\x1b[33m%s\x1b[0m', 'Running sync would overwrite beta code.');
+    console.log('');
+    console.log('Options:');
+    console.log('  1. Use the claude-mem UI on the configured worker port to update beta');
+    console.log('  2. Switch to stable in UI first, then run sync');
+    console.log('  3. Force sync: npm run sync-marketplace:force');
+    console.log('');
+    process.exit(1);
   }
 
-  const pluginDir = path.join(rootDir, 'plugin');
-  const pluginGitignoreExcludes = getGitignoreExcludes(pluginDir);
-  // rsync's gitignore excludes drop tracked-but-ignored files. plugin/.mcp.json is
-  // force-tracked but matched by the root .gitignore `.mcp.json` line, so it never
-  // reaches the copy — and without it Claude Code doesn't register the MCP server
-  // when the marketplace points at this copy. Restore it explicitly.
-  const mcpSrc = path.join(rootDir, 'plugin', '.mcp.json');
+  const installedMismatch = detectInstalledVersion(getPluginVersion());
+  if (installedMismatch) reportInstalledMismatch(installedMismatch);
 
-  for (const cacheName of cacheVersionNames) {
-    const cachePath = path.join(CACHE_BASE_PATH, cacheName);
+  console.log('Syncing to marketplace...');
+  try {
+    const rootDir = path.join(__dirname, '..');
+    resolveAllowedSkills(path.join(rootDir, 'plugin', 'skills'));
 
-    console.log(`Syncing to cache folder (${cacheName})...`);
-    execSync(
-      `rsync -av --delete --exclude=.git ${pluginGitignoreExcludes} plugin/ "${cachePath}/"`,
-      { stdio: 'inherit' }
-    );
+    const marketplace = mirrorMarketplace(rootDir, INSTALLED_PATH);
+    console.log(`Marketplace: ${marketplace.copied} copied, ${marketplace.metadata} metadata reconciled, ${marketplace.deleted} stale removed`);
 
-    console.log(`Running bun install in cache folder (${cacheName})...`);
-    execSync(`bun install`, { cwd: cachePath, stdio: 'inherit' });
+    console.log('Running bun install in marketplace...');
+    // --ignore-scripts: the marketplace root resolves the repo's tree-sitter dev deps,
+    // and tree-sitter-cli's install script downloads a binary from the GitHub release
+    // CDN — blocked here. Without the flag the install fails and aborts the sync BEFORE
+    // filterSkills(), silently leaving every bundled skill installed
+    // (fork-notes/dropped-tree-sitter.md).
+    execSync('bun install --ignore-scripts', { cwd: INSTALLED_PATH, stdio: 'inherit' });
 
-    filterSkills(path.join(cachePath, 'skills'));
-
-    if (existsSync(mcpSrc)) {
-      copyFileSync(mcpSrc, path.join(cachePath, '.mcp.json'));
+    const version = getPluginVersion();
+    // Claude Code normalizes semver build-metadata '+' to '-' in the cache dir name,
+    // so the canonical loaded dir uses '-'. But installed_plugins.json has been seen
+    // in the wild with the raw '+' installPath (cache-shadowing gotcha) — the '+' dir
+    // is then the one Claude actually loads. Target the normalized dir always, plus
+    // the raw '+' dir when it already exists on disk (i.e. some install points at it).
+    // We don't create a '+' dir that doesn't exist, to avoid minting phantoms.
+    const cacheVersionNames = new Set([version.replace(/\+/g, '-')]);
+    if (existsSync(path.join(CACHE_BASE_PATH, version))) {
+      cacheVersionNames.add(version);
     }
+    const activeCacheVersion = getActiveCacheVersion(installedMismatch?.installedPath);
+    if (activeCacheVersion) {
+      cacheVersionNames.add(activeCacheVersion);
+    }
+    const pinnedCacheVersion = getPinnedCacheVersion();
+    if (pinnedCacheVersion) {
+      cacheVersionNames.add(pinnedCacheVersion);
+    }
+
+    const pluginDir = path.join(rootDir, 'plugin');
+    // The gitignore excludes drop tracked-but-ignored files. plugin/.mcp.json is
+    // force-tracked but matched by the root .gitignore `.mcp.json` line, so it never
+    // reaches the copy — and without it Claude Code doesn't register the MCP server
+    // when the marketplace points at this copy. Restore it explicitly.
+    const mcpSrc = path.join(pluginDir, '.mcp.json');
+
+    for (const cacheName of cacheVersionNames) {
+      const cachePath = path.join(CACHE_BASE_PATH, cacheName);
+
+      console.log(`Syncing to cache folder (${cacheName})...`);
+      const cache = mirrorDirectory(pluginDir, cachePath, {
+        exclude: ['.git', ...getGitignoreExcludes(pluginDir)]
+      });
+      console.log(`Cache: ${cache.copied} copied, ${cache.metadata} metadata reconciled, ${cache.deleted} stale removed`);
+
+      console.log(`Running bun install in cache folder (${cacheName})...`);
+      execSync(`bun install`, { cwd: cachePath, stdio: 'inherit' });
+
+      filterSkills(path.join(cachePath, 'skills'));
+
+      if (existsSync(mcpSrc)) {
+        copyFileSync(mcpSrc, path.join(cachePath, '.mcp.json'));
+      }
+    }
+
+    filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
+    if (existsSync(mcpSrc)) {
+      copyFileSync(mcpSrc, path.join(INSTALLED_PATH, 'plugin', '.mcp.json'));
+    }
+
+    console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
+
+  } catch (error) {
+    console.error('\x1b[31m%s\x1b[0m', 'Sync failed:', error.message);
+    process.exit(1);
   }
-
-  filterSkills(path.join(INSTALLED_PATH, 'plugin', 'skills'));
-  if (existsSync(mcpSrc)) {
-    copyFileSync(mcpSrc, path.join(INSTALLED_PATH, 'plugin', '.mcp.json'));
-  }
-
-  console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
-
-} catch (error) {
-  console.error('\x1b[31m%s\x1b[0m', 'Sync failed:', error.message);
-  process.exit(1);
 }
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { getGitignoreExcludes, getMarketplaceExcludes, mirrorMarketplace, INSTALLED_PATH, CACHE_BASE_PATH };

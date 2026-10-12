@@ -37,7 +37,7 @@ describe('userMessageHandler project context', () => {
       });
 
       expect(workerContextPaths).toEqual([
-        '/api/context/inject?project=ACME&colors=true&platformSource=claude',
+        '/api/context/inject?projects=ACME&colors=true&platformSource=claude',
       ]);
     } finally {
       if (originalProjectRoot === undefined) {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: () => {
-    throw new Error('Claude SDK should not be used when CLAUDE_MEM_PROVIDER=openrouter');
+    throw new Error('Claude SDK should not be used when an HTTP provider is selected');
   },
 }));
 
@@ -44,16 +44,6 @@ function corpusFixture(): CorpusFile {
       created_at_epoch: Date.parse('2026-06-10T00:00:00.000Z'),
     }],
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe('KnowledgeAgent OpenRouter corpus mode', () => {
@@ -144,77 +134,55 @@ describe('KnowledgeAgent OpenRouter corpus mode', () => {
 
     expect(sessionId).toBe('openrouter-corpus-mks-smoke-test-existing');
   });
+});
 
-  it('queues first-time priming in the background and reports pending while it runs', async () => {
-    const response = deferred<Response>();
-    let fetchCalls = 0;
-    globalThis.fetch = mock(async () => {
-      fetchCalls++;
-      return await response.promise;
-    }) as any;
-
-    const writes: CorpusFile[] = [];
-    const corpus = corpusFixture();
-    const agent = new KnowledgeAgent({
-      write: (updated: CorpusFile) => {
-        writes.push({ ...updated });
-      },
-    } as any);
-
-    const queued = await agent.requestPrime(corpus);
-    const pending = await agent.requestPrime(corpus);
-
-    expect(queued).toEqual({
-      name: 'mks-smoke-test',
-      status: 'queued',
-      message: 'Corpus priming started in background. Call prime_corpus again in ~30 seconds.',
-      retry_after_seconds: 30,
-    });
-    expect(pending).toEqual({
-      name: 'mks-smoke-test',
-      status: 'pending',
-      message: 'Corpus priming is still running. Call prime_corpus again in ~30 seconds.',
-      retry_after_seconds: 30,
-    });
-    expect(fetchCalls).toBe(1);
-
-    response.resolve(new Response(JSON.stringify({
-      choices: [{ message: { content: 'primed' } }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } }));
-
-    await Bun.sleep(0);
-
-    const ready = await agent.requestPrime(corpus);
-    expect(ready.status).toBe('ready');
-    expect(ready.session_id).toStartWith('openrouter-corpus-mks-smoke-test-');
-    expect(writes.at(-1)?.session_id).toBe(ready.session_id);
+describe('KnowledgeAgent openai-compatible corpus mode', () => {
+  beforeEach(() => {
+    process.env.CLAUDE_MEM_PROVIDER = 'openai-compatible';
+    process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL = 'https://api.example.test/v4';
+    process.env.CLAUDE_MEM_OPENAI_COMPAT_MODEL = 'glm-bulk';
+    process.env.CLAUDE_MEM_OPENAI_COMPAT_API_KEY = 'compat-key';
   });
 
-  it('returns a background priming error once and allows retry', async () => {
-    let fetchCalls = 0;
-    globalThis.fetch = mock(async () => {
-      fetchCalls++;
-      return new Response('provider unavailable', { status: 503 });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env = { ...originalEnv };
+  });
+
+  it('primes and queries the openai-compatible endpoint without the Claude SDK', async () => {
+    process.env.CLAUDE_MEM_OPENAI_COMPAT_QA_MODEL = 'glm-smart';
+    const requests: Array<{ url: string; auth: string; body: any }> = [];
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: String(url),
+        auth: (init?.headers as Record<string, string>).authorization,
+        body: JSON.parse(String(init?.body)),
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'answer' } }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
     }) as any;
 
     const corpus = corpusFixture();
+    const agent = new KnowledgeAgent({ read: () => corpus, write: () => {} } as any);
+
+    const sessionId = await agent.prime(corpus);
+    const result = await agent.query(corpus, 'Question?');
+
+    expect(result.answer).toBe('answer');
+    expect(result.session_id).toBe(sessionId);
+    expect(requests.map(request => request.url)).toEqual([
+      'https://api.example.test/v4/chat/completions',
+      'https://api.example.test/v4/chat/completions',
+    ]);
+    expect(requests.every(request => request.auth === 'Bearer compat-key')).toBe(true);
+    expect(requests.at(-1)?.body.model).toBe('glm-smart');
+  });
+
+  it('fails loudly when the endpoint is not configured, instead of falling back to Claude', async () => {
+    delete process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL;
     const agent = new KnowledgeAgent({ write: () => {} } as any);
 
-    const queued = await agent.requestPrime(corpus);
-    expect(queued.status).toBe('queued');
-
-    await Bun.sleep(0);
-
-    const failed = await agent.requestPrime(corpus);
-    expect(failed).toEqual({
-      name: 'mks-smoke-test',
-      status: 'error',
-      message: 'Corpus priming failed in background. Call prime_corpus again to retry.',
-      error: 'OpenRouter corpus query failed (503): provider unavailable',
-    });
-
-    const retry = await agent.requestPrime(corpus);
-    expect(retry.status).toBe('queued');
-    expect(fetchCalls).toBe(2);
+    await expect(agent.prime(corpusFixture())).rejects.toThrow('openai-compatible provider not configured');
   });
 });

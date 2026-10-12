@@ -58,8 +58,10 @@ Left on, their schemas cost context on every session for nothing.
 
 ### Q4 — Which model provider?
 
-The interactive installer asks this too (`Which memory provider do you want to
-use?`): `claude` (default) | `gemini` | `openrouter`. This picks what compresses
+The interactive installer asks this too: `openai-compatible` (default) |
+`openrouter` | `gemini` | `claude`. A terminal run then asks the human for the
+endpoint, model and key; an agent (non-TTY) run saves the provider and never
+takes a key. There is no CMEM Pro row and no cmem.ai sign-in in the fork. This picks what compresses
 every tool call into an observation, so it is a cost decision, not a taste one —
 it runs constantly in the background.
 
@@ -88,9 +90,10 @@ dependency.
 ### Fresh machine / end user
 
 ```bash
-CLAUDE_MEM_SKILL_SET=compact npx claude-mem install
+CLAUDE_MEM_SKILL_SET=compact node dist/npx-cli/index.js install --ide claude-code
 ```
 
+From a checkout (see README — `npx claude-mem` installs upstream, not the fork).
 Interactive. It will ask for IDEs (Q2), runtime, provider, and telemetry.
 Answer: runtime **worker** (the fork's default — server beta is not ready,
 FORK_NOTES "Runtime policy"), telemetry **no** (the fork defaults it off).
@@ -131,10 +134,11 @@ them. A real env var still overrides settings.json (`applyEnvOverrides`).
 
 ### Provider
 
-`CLAUDE_MEM_PROVIDER` = `claude` (default) | `gemini` | `openrouter`
+`CLAUDE_MEM_PROVIDER` = `openai-compatible` (installer default) | `openrouter` | `gemini` | `claude` | `codex`
 
 | Provider | Keys | Notes |
 |---|---|---|
+| `openai-compatible` | `CLAUDE_MEM_OPENAI_COMPAT_BASE_URL`, `CLAUDE_MEM_OPENAI_COMPAT_MODEL`, `CLAUDE_MEM_OPENAI_COMPAT_API_KEY` (pool: `CLAUDE_MEM_OPENAI_COMPAT_API_KEYS`) | upstream's native provider; the fork's memory generator runs here |
 | `claude` | `CLAUDE_MEM_MODEL` (default `claude-haiku-4-5-20251001`), `CLAUDE_MEM_CLAUDE_AUTH_METHOD` = `subscription` (default) \| `api-key` | `subscription` uses the logged-in Claude SDK account — no key needed |
 | `gemini` | `CLAUDE_MEM_GEMINI_API_KEY`, `CLAUDE_MEM_GEMINI_MODEL` (default `gemini-2.5-flash-lite`), `CLAUDE_MEM_GEMINI_RATE_LIMITING_ENABLED` (default `true`) | rate limiting defaults on for the free tier — leave it on unless paid |
 | `openrouter` | `CLAUDE_MEM_OPENROUTER_API_KEY`, `CLAUDE_MEM_OPENROUTER_MODEL` (default `xiaomi/mimo-v2-flash:free`), `CLAUDE_MEM_OPENROUTER_QA_MODEL`, `CLAUDE_MEM_OPENROUTER_BASE_URL` | the fork's `query_corpus` uses a plain `/chat/completions` request here, so corpus Q&A works with **no Claude OAuth at all** |

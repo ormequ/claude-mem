@@ -76,7 +76,11 @@
   `{ids, orderBy, limit, project}` and deliberately drops `platformSource`, exactly as the
   observations handler does — that is what keeps the read cross-harness per the guardrail.
   Re-sync: if upstream adds its own prompt batch route, drop ours and keep the MCP tool
-  pointed at theirs.
+  pointed at theirs (v13.35 has none; it added `get_tool_uses` beside it). Since v13.35
+  upstream's `callWorker` formats every JSON reply by purpose (`mcp-text-format.ts`) and an
+  unknown endpoint falls to the observation formatter, which would drop `prompt_text` and
+  cap at five rows — so `get_prompts` calls with `text: true` and returns the worker's rows
+  as-is, which is what it returned before.
 - **`getUserPromptsByIds` LEFT JOINs `sdk_sessions` (2026-08-03).** It was an INNER join, so
   the 65 of 3051 prompts whose `session_db_id IS NULL` were unfetchable by id: `/api/prompt/:id`
   404s them and the batch route returns short without saying it dropped anything. Found by a
@@ -85,6 +89,9 @@
   JOINs, so this was an inconsistency, not a design. A `project` filter still excludes these
   rows (the `s.project = ?` condition is NULL for them), which is correct — an unattributed
   prompt belongs to no project. One word in an upstream method; re-sync: re-apply `LEFT`.
+  (Since v13.35 `searchUserPrompts` with neither query nor filter returns `[]`, upstream's
+  behaviour, instead of the old 400; `hasFilters` is still taken before the relay predicate
+  is appended, so the predicate alone never counts as a filter.)
 - **Machine relays are filtered out of prompt reads (2026-08-15).** Delegate reports
   (`<agent-message from=…>`) and `<cross-session-message>` envelopes arrive on the same
   `UserPromptSubmit` hook as human text and are stored verbatim, so `search(type="prompts")` and

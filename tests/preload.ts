@@ -16,6 +16,15 @@ import { join } from 'path';
  * cleanup (an afterAll here could rip the dir out from under frozen module
  * constants while later test files still run).
  */
+// FORK: the upstream suite assumes upstream's `claude` provider default; the fork
+// defaults to openai-compatible and idles while it is unconfigured. Fork tests
+// that exercise the fork default pin CLAUDE_MEM_PROVIDER themselves.
+process.env.CLAUDE_MEM_PROVIDER ??= 'claude';
+
+for (const key of ['CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED', 'CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED']) {
+  process.env[key] ??= 'false';
+}
+
 if (!process.env.CLAUDE_MEM_DATA_DIR) {
   process.env.CLAUDE_MEM_DATA_DIR = mkdtempSync(join(tmpdir(), 'claude-mem-test-run-'));
 }

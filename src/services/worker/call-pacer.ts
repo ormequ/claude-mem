@@ -12,6 +12,8 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import { isClassified } from './provider-errors.js';
+import { MAX_RETRY_AFTER_MS, type RetryOptions } from './retry.js';
 
 export interface PacerClock {
   now(): number;
@@ -61,5 +63,75 @@ export class CallPacer {
   }
 }
 
-/** Shared by every session's generator on the OpenAI-compatible path. */
+/** Shared by every session's generator, one per provider. */
 export const openRouterPacer = new CallPacer();
+export const openAICompatPacer = new CallPacer();
+
+/** One provider's pacing + retry policy, from its `<prefix>_*` settings keys. */
+export interface PacingPolicy {
+  rateLimitingEnabled: boolean;
+  minRequestIntervalMs: number;
+  /** The wall-clock window a tripped ceiling needs; withRetry's `rateLimitDelayMs`. */
+  rateLimitBackoffMs: number;
+  maxRetries: number;
+}
+
+/**
+ * Same posture as the Gemini rate-limiting switch: on unless explicitly
+ * disabled, since a gateway refusing this path costs a whole batch.
+ * Non-numeric spellings fall back to the defaults.
+ */
+export function resolvePacingPolicy(
+  settings: object,
+  prefix: 'CLAUDE_MEM_OPENROUTER' | 'CLAUDE_MEM_OPENAI_COMPAT',
+): PacingPolicy {
+  const read = (suffix: string): unknown => (settings as Record<string, unknown>)[`${prefix}_${suffix}`];
+  return {
+    rateLimitingEnabled: String(read('RATE_LIMITING_ENABLED')) !== 'false',
+    minRequestIntervalMs: Number(read('MIN_REQUEST_INTERVAL_MS')) || 1500,
+    rateLimitBackoffMs: Number(read('RATE_LIMIT_BACKOFF_MS')) || 75_000,
+    maxRetries: Number(read('MAX_RETRIES')) || 4,
+  };
+}
+
+/**
+ * The withRetry options for a policy. Rate limiting off means upstream's retry
+ * policy, untouched: no pacing, no window, no retry-count override.
+ */
+export function pacedRetryOptions(policy: PacingPolicy): Pick<RetryOptions, 'maxRetries' | 'rateLimitDelayMs'> {
+  return policy.rateLimitingEnabled
+    ? { maxRetries: policy.maxRetries, rateLimitDelayMs: policy.rateLimitBackoffMs }
+    : {};
+}
+
+/**
+ * Wait for this worker's next call slot, then run the attempt. A refusal
+ * holds every session off, not just the generator that got the 429 — the
+ * ceiling is per-account, and the storms that trip it are several sessions
+ * generating at once.
+ *
+ * Except when the key pool has another key to rotate to (`poolSize` > 1):
+ * then the pool's per-key cooldown owns the window, and holding everyone off
+ * would stall the very rotation that sidesteps it. The deferral is capped the
+ * way withRetry caps its own wait, so a Retry-After of an hour cannot park the
+ * pacer longer than the retry it precedes.
+ */
+export async function pacedAttempt<T>(
+  pacer: CallPacer,
+  policy: PacingPolicy,
+  poolSize: number,
+  attempt: () => Promise<T>,
+): Promise<T> {
+  if (!policy.rateLimitingEnabled) return attempt();
+
+  await pacer.acquire(policy.minRequestIntervalMs);
+  try {
+    return await attempt();
+  } catch (err: unknown) {
+    if (poolSize <= 1 && isClassified(err) && err.kind === 'rate_limit') {
+      const capMs = Math.max(MAX_RETRY_AFTER_MS, policy.rateLimitBackoffMs);
+      pacer.defer(Math.min(err.retryAfterMs ?? policy.rateLimitBackoffMs, capMs));
+    }
+    throw err;
+  }
+}

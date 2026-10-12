@@ -47,7 +47,11 @@
 // Excluded from every row body: id (rides as op.origin_id), synced_at
 // (device-local push state), origin_device_id/origin_local_id/sync_rev (ride
 // as op.origin_device/op.origin_id/op.rev), relevance_count (device-local
-// usage counter).
+// usage counter), occurrence_count and title_norm_key (device-local #3038
+// dedup bookkeeping; a Tier-0 merge bumps the count without re-dirtying the
+// row, and the key is recomputed locally by the dedup scan), and
+// reinforcement_dates and last_reinforced (device-local ACT-R reinforcement
+// history; a replica ranks on its own confirmations).
 //
 // kind 'mutation'  (op.origin_id = op UUID minted at the mutation site):
 //   set_title:
@@ -135,7 +139,7 @@
 // SessionSearch.ts:76-152; user_prompts: SessionStore.ts:867-895) index them
 // automatically. There is no FTS-external write path in this module.
 //
-// CHROMA: newly inserted rows are forwarded to Chroma AFTER commit,
+// CHROMA: inserted and revised rows are forwarded to Chroma AFTER commit,
 // fire-and-forget (.then().catch() — the ResponseProcessor.ts pattern).
 // The ChromaSyncLike instance is injected; Phase 3's SyncClient wires
 // DatabaseManager.getChromaSync() here. Omitting it skips Chroma (the boot
@@ -156,14 +160,30 @@
 //     the association. Stubs are created with status 'completed' and stay
 //     'completed' even if a live local session later adopts them.
 
+import { emitContextInvalidation } from '../../shared/context-invalidation.js';
 import type { Database } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource } from '../../shared/platform-source.js';
+import { parseFileList } from '../sqlite/observations/files.js';
 import {
   assertCanonicalDecimal,
   compareCanonicalDecimals,
   incrementCanonicalDecimal,
 } from './CanonicalContent.js';
+import { parseStringListField } from './string-list-field.js';
+
+/**
+ * A hub change this client could not decode. It keeps its seq so the page
+ * stays contiguous; applyOps sets it aside (sync_pull_quarantine) instead of
+ * failing every op behind it.
+ */
+export interface UndecodableOp {
+  seq: string;
+  /** The decode error message. */
+  undecodable: string;
+  /** The raw change as received, kept for diagnosis. */
+  raw: string;
+}
 
 /** One op as returned by the hub's getChanges (SyncHub.ts ChangeOp). */
 export interface SyncOp {
@@ -200,10 +220,13 @@ export interface ChromaSyncLike {
       concepts: string[];
       files_read: string[];
       files_modified: string[];
+      text?: string | null;
+      merged_into_project?: string | null;
     },
     promptNumber: number,
     createdAtEpoch: number,
-    platformSource?: string
+    platformSource?: string,
+    replaceExisting?: boolean
   ): Promise<void>;
   syncSummary(
     summaryId: number,
@@ -216,10 +239,12 @@ export interface ChromaSyncLike {
       completed: string | null;
       next_steps: string | null;
       notes: string | null;
+      merged_into_project?: string | null;
     },
     promptNumber: number,
     createdAtEpoch: number,
-    platformSource?: string
+    platformSource?: string,
+    replaceExisting?: boolean
   ): Promise<void>;
   syncUserPrompt(
     promptId: number,
@@ -266,6 +291,8 @@ export interface ApplyResult {
   skippedStale: number;
   /** Ops skipped because seq <= stored cursor (already applied earlier). */
   skippedCursor: number;
+  /** Ops that can never apply here, set aside in sync_pull_quarantine. */
+  quarantined: number;
   /** Cursor after this call. */
   cursor: string;
   /** True when the epoch guard reset the cursor; batch was NOT applied. */
@@ -279,15 +306,34 @@ interface RowIdRev {
 
 type ChromaJob = () => Promise<void>;
 
-function invalidOp(op: SyncOp, message: string): Error {
-  return new Error(`SyncApply: invalid op seq=${op.seq} kind=${op.kind} origin=${op.origin_device}/${op.origin_id}: ${message}`);
+/** An op that can never apply on this device as-is (deterministic, not transient). */
+export class SyncApplyInvalidOpError extends Error {}
+
+function invalidOp(op: SyncOp, message: string): SyncApplyInvalidOpError {
+  return new SyncApplyInvalidOpError(`SyncApply: invalid op seq=${op.seq} kind=${op.kind} origin=${op.origin_device}/${op.origin_id}: ${message}`);
+}
+
+/** A violated constraint depends on local rows, so a later retry can succeed. */
+function isConstraintViolation(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT');
+}
+
+/**
+ * True when re-running the op against the same database can only fail the
+ * same way: a malformed or conflicting op, or a constraint it violates. Any
+ * other error (busy, I/O, disk full) is transient and must fail the batch so
+ * the page is retried — never set aside.
+ */
+function isUnapplicableOp(error: unknown): boolean {
+  return error instanceof SyncApplyInvalidOpError || isConstraintViolation(error);
 }
 
 /**
  * Typed field readers — loud, not lossy: a MISSING (or null) field is
  * tolerated as null (required-ness is enforced by the per-kind checks), but
  * a field that is PRESENT with the wrong type is a malformed body and throws,
- * failing the batch instead of silently writing NULL.
+ * so applyOps sets the op aside instead of silently writing NULL.
  */
 function fieldString(op: SyncOp, obj: Record<string, unknown>, key: string): string | null {
   const v = obj[key];
@@ -303,22 +349,12 @@ function fieldNumber(op: SyncOp, obj: Record<string, unknown>, key: string): num
   throw invalidOp(op, `field ${key} must be a finite number, got ${typeof v}`);
 }
 
-/** Parse a JSON-string list column for Chroma; never throws. */
-function parseListColumn(v: unknown): string[] {
-  if (typeof v !== 'string') return [];
-  try {
-    const parsed = JSON.parse(v);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
-  }
-}
-
 export class SyncApply {
   private readonly db: Database;
   private readonly deviceId: string;
   private readonly chromaSync: ChromaSyncLike | null;
   private readonly now: () => number;
+  private readonly chromaWrites = new Map<string, Promise<void>>();
 
   constructor(db: Database, options: SyncApplyOptions) {
     if (!options.deviceId) {
@@ -420,16 +456,25 @@ export class SyncApply {
    * Apply one pulled batch. Ops must be in ascending seq order (the hub
    * returns them that way). Runs in ONE transaction: row upserts, mutation
    * UPDATEs, and the cursor advance commit together or roll back together.
-   * A malformed op throws and rolls back the whole batch — the cursor does
-   * not move, so the next pull retries the same page (loud, not lossy).
+   *
+   * Each op runs in its own savepoint. An op that can never apply here (a
+   * malformed body, an equal-revision hash conflict, a violated constraint,
+   * an undecodable change) is rolled back alone, recorded with its reason
+   * and raw body in sync_pull_quarantine, logged, and the cursor moves past
+   * it. One bad op used to roll back its whole page forever: a hash conflict
+   * from a device that reused its local ids held one Mac's pull at cursor 0
+   * for three days (3,000 failed retries). Page-level problems (sequence
+   * gaps, out-of-order ops) and transient errors (busy, I/O) still fail the
+   * batch, so the page is retried.
    */
-  applyOps(ops: SyncOp[], options: ApplyOpsOptions = {}): ApplyResult {
+  applyOps(ops: Array<SyncOp | UndecodableOp>, options: ApplyOpsOptions = {}): ApplyResult {
     if (options.epoch !== undefined && this.handleEpoch(options.epoch)) {
       return {
         applied: 0,
         skippedOwn: 0,
         skippedStale: 0,
         skippedCursor: 0,
+        quarantined: 0,
         cursor: '0',
         epochReset: true,
       };
@@ -440,20 +485,24 @@ export class SyncApply {
       skippedOwn: 0,
       skippedStale: 0,
       skippedCursor: 0,
+      quarantined: 0,
       cursor: this.getCursor(),
       epochReset: false,
     };
     if (ops.length === 0) return result;
 
     const chromaJobs: ChromaJob[] = [];
+    const setAside: Array<Record<string, unknown>> = [];
+    const recovered: Array<Record<string, unknown>> = [];
+    let removedOrRemapped = false;
 
     const tx = this.db.transaction(() => {
       const cursor = this.getCursor();
+      const epoch = this.getEpoch() ?? '';
       let lastSeq = cursor;
 
       for (const op of ops) {
         const seq = assertCanonicalDecimal(op.seq, { positive: true });
-        assertCanonicalDecimal(op.rev, { positive: true });
         // Strict HTTP pages describe the exact raw suffix after our cursor.
         // Validate every supplied sequence before the ordinary replay skip;
         // otherwise a stale prefix (even an out-of-order one) is silently
@@ -470,20 +519,49 @@ export class SyncApply {
         }
         lastSeq = seq;
 
+        if ('undecodable' in op) {
+          setAside.push(this.quarantine(epoch, seq, null, op.undecodable, op.raw));
+          result.quarantined++;
+          continue;
+        }
+
         if (op.origin_device === this.deviceId) {
           result.skippedOwn++;
           continue;
         }
 
-        let outcome: 'applied' | 'stale';
-        if (op.kind === 'mutation') {
-          outcome = this.applyMutation(op);
-        } else {
-          outcome = this.applyCanonicalRowOp(op, chromaJobs);
+        const attempt = this.applyInSavepoint(chromaJobs, () => {
+          try {
+            assertCanonicalDecimal(op.rev, { positive: true });
+          } catch (error) {
+            throw invalidOp(op, error instanceof Error ? error.message : String(error));
+          }
+          return op.kind === 'mutation'
+            ? this.applyMutation(op)
+            : this.applyCanonicalRowOp(op, chromaJobs);
+        });
+        if ('unapplicable' in attempt) {
+          const error = attempt.unapplicable;
+          // A violated constraint depends on other local rows, so retry it
+          // later. Only head-ledger row ops: the ledger orders a late retry
+          // (stale once a newer revision applied); mutations depend on log
+          // order and are never replayed out of it.
+          const retryable = op.kind !== 'mutation' && Boolean(op.entity_id) && isConstraintViolation(error);
+          const reason = error instanceof Error ? error.message : String(error);
+          setAside.push(this.quarantine(epoch, seq, op, reason, op.body, retryable));
+          result.quarantined++;
+          continue;
         }
-        if (outcome === 'applied') result.applied++;
-        else result.skippedStale++;
+        if (attempt.outcome === 'applied') {
+          result.applied++;
+          // A tombstone deletes a row; a mutation can re-key or retitle rows.
+          if (op.kind === 'mutation' || op.deleted === true) removedOrRemapped = true;
+        } else {
+          result.skippedStale++;
+        }
       }
+
+      this.retrySetAside(chromaJobs, recovered);
 
       // Cursor advance IN THE SAME TRANSACTION as the rows (crash-safe
       // exactly-once): a crash before COMMIT leaves both unmoved.
@@ -493,6 +571,23 @@ export class SyncApply {
       result.cursor = lastSeq;
     });
     tx();
+
+    // Pulled rows change what SessionStart shows. 'all': a mutation (remap,
+    // set-title) can move rows between projects, so no single project names it.
+    // 'removal' when a tombstone or mutation applied: the cached block may show
+    // what is now gone, so it must not be served until re-rendered.
+    if (result.applied > 0 || recovered.length > 0) {
+      emitContextInvalidation('all', 'SyncApply.applyOps', removedOrRemapped ? 'removal' : 'additive');
+    }
+
+    // Logged after commit so a batch that later rolls back (and is retried)
+    // does not report ops it never set aside.
+    for (const entry of setAside) {
+      logger.warn('SYNC_APPLY', 'Set aside a pulled op that cannot apply on this device; sync continues past it (sync_pull_quarantine)', entry);
+    }
+    for (const entry of recovered) {
+      logger.info('SYNC_APPLY', 'Applied a previously set-aside op on retry', entry);
+    }
 
     // Chroma AFTER commit, fire-and-forget (ResponseProcessor.ts pattern):
     // a Chroma failure must never fail or re-order durable application.
@@ -506,6 +601,122 @@ export class SyncApply {
     }
 
     return result;
+  }
+
+  /** Preserve hub order per row while unrelated rows can still forward concurrently. */
+  private enqueueChromaWrite(key: string, write: () => Promise<void>): Promise<void> {
+    const previous = this.chromaWrites.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(write);
+    this.chromaWrites.set(key, next);
+    const clear = () => { if (this.chromaWrites.get(key) === next) this.chromaWrites.delete(key); };
+    void next.then(clear, clear);
+    return next;
+  }
+
+  /**
+   * Run one op in a savepoint. An op that can never apply here is rolled
+   * back alone (its writes and queued Chroma jobs) and returned as
+   * `unapplicable`; any other error fails the batch.
+   */
+  private applyInSavepoint(
+    chromaJobs: ChromaJob[],
+    applyOp: () => 'applied' | 'stale',
+  ): { outcome: 'applied' | 'stale' } | { unapplicable: unknown } {
+    const chromaJobCount = chromaJobs.length;
+    this.db.run('SAVEPOINT sync_apply_op');
+    try {
+      const outcome = applyOp();
+      this.db.run('RELEASE sync_apply_op');
+      return { outcome };
+    } catch (error) {
+      try {
+        this.db.run('ROLLBACK TO sync_apply_op');
+        this.db.run('RELEASE sync_apply_op');
+      } catch {
+        // SQLite already rolled the whole transaction back (I/O, full
+        // disk): fail the batch on the original cause.
+        throw error;
+      }
+      chromaJobs.length = chromaJobCount;
+      if (!isUnapplicableOp(error)) throw error;
+      return { unapplicable: error };
+    }
+  }
+
+  /**
+   * Retry set-aside row ops whose failure depended on other local rows (a
+   * violated constraint — e.g. a rev-2 update whose content hash another row
+   * held until it was deleted). Runs at the end of every batch; the head
+   * ledger makes a late retry safe (stale once a newer revision applied). A
+   * retry that still fails stays set aside and never fails the batch.
+   */
+  private retrySetAside(chromaJobs: ChromaJob[], recovered: Array<Record<string, unknown>>): void {
+    const rows = this.db.prepare(`
+      SELECT id, seq, kind, entity_id, origin_device_id, origin_local_id,
+             entity_rev, operation_sha256, raw_body
+      FROM sync_pull_quarantine WHERE retryable = 1 ORDER BY id
+    `).all() as Array<{
+      id: number; seq: string; kind: SyncOp['kind']; entity_id: string; origin_device_id: string;
+      origin_local_id: string; entity_rev: string; operation_sha256: string; raw_body: string;
+    }>;
+    for (const row of rows) {
+      const op: SyncOp = {
+        seq: row.seq,
+        kind: row.kind,
+        origin_device: row.origin_device_id,
+        origin_id: row.origin_local_id,
+        rev: row.entity_rev,
+        body: row.raw_body,
+        server_ts: 0, // read only by mutations, which are never retried
+        entity_id: row.entity_id,
+        entity_rev: row.entity_rev,
+        operation_sha256: row.operation_sha256,
+        deleted: false, // a tombstone cannot violate a constraint
+      };
+      let attempt: ReturnType<SyncApply['applyInSavepoint']>;
+      try {
+        attempt = this.applyInSavepoint(chromaJobs, () => this.applyCanonicalRowOp(op, chromaJobs));
+      } catch (error) {
+        if (!this.db.inTransaction) throw error; // the batch itself is gone
+        continue; // transient: the next batch retries it again
+      }
+      if ('unapplicable' in attempt) continue;
+      this.db.prepare('DELETE FROM sync_pull_quarantine WHERE id = ?').run(row.id);
+      recovered.push({ seq: row.seq, entityId: row.entity_id, outcome: attempt.outcome });
+    }
+  }
+
+  /**
+   * Record an op that can never apply here, inside the batch transaction so
+   * the record commits with the cursor advance past it. Returns the log
+   * entry; applyOps logs it after commit.
+   */
+  private quarantine(
+    epoch: string,
+    seq: string,
+    op: SyncOp | null,
+    reason: string,
+    rawBody: string,
+    retryable = false,
+  ): Record<string, unknown> {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO sync_pull_quarantine
+        (epoch, seq, kind, entity_id, origin_device_id, origin_local_id,
+         entity_rev, operation_sha256, reason, raw_body, retryable, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      epoch, seq, op?.kind ?? null, op?.entity_id ?? null, op?.origin_device ?? null,
+      op?.origin_id ?? null, op?.entity_rev ?? op?.rev ?? null, op?.operation_sha256 ?? null,
+      reason, rawBody, retryable ? 1 : 0, this.now(),
+    );
+    return {
+      seq,
+      kind: op?.kind ?? null,
+      entityId: op?.entity_id ?? null,
+      origin: op ? `${op.origin_device}/${op.origin_id}` : null,
+      reason,
+      retryable,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -549,7 +760,11 @@ export class SyncApply {
       if (order < 0) return 'stale';
       if (order === 0) {
         if (op.operation_sha256 !== head.operation_sha256) {
-          throw invalidOp(op, 'same entity revision has a different canonical operation hash');
+          // Two different bodies claim one (entity, rev): a device reused a
+          // local id (restored or cloned database) or a rebuilt hub kept the
+          // other copy. The first accepted copy stays, matching the cloud
+          // projector's cross-epoch rule; applyOps sets this op aside.
+          throw invalidOp(op, `same entity revision has a different canonical operation hash (kept local ${head.operation_sha256}, hub sent ${op.operation_sha256})`);
         }
         return 'stale';
       }
@@ -732,6 +947,7 @@ export class SyncApply {
         createdAt, createdAtEpoch, op.rev, this.now(),
         existing.id
       );
+      this.forwardObservation(existing.id, op, body, chromaJobs, true);
       return 'applied';
     }
 
@@ -766,10 +982,34 @@ export class SyncApply {
       return 'stale';
     }
 
+    this.forwardObservation(inserted.id, op, body, chromaJobs);
+    return 'applied';
+  }
+
+  /**
+   * The platform backfill attributes to rows of this memory session: it
+   * joins sdk_sessions on memory_session_id and defaults to claude. Forwards
+   * use the same value so a revision keeps the row's platform scope.
+   */
+  private sessionPlatformSource(memorySessionId: string): string | undefined {
+    const session = this.db.prepare(
+      'SELECT platform_source FROM sdk_sessions WHERE memory_session_id = ?'
+    ).get(memorySessionId) as { platform_source: string | null } | undefined;
+    return session?.platform_source ?? undefined;
+  }
+
+  // Forwards hand Chroma the committed row's stored values, parsed as backfill
+  // parses them. A revision deletes every fragment the new documents lack, so
+  // any difference from backfill's documents would delete indexed content.
+  private forwardObservation(id: number, op: SyncOp, body: Record<string, unknown>, chromaJobs: ChromaJob[], replaceExisting = false): void {
+    const memorySessionId = fieldString(op, body, 'memory_session_id')!;
+    const project = fieldString(op, body, 'project')!;
+    const createdAtEpoch = fieldNumber(op, body, 'created_at_epoch')!;
+    const type = fieldString(op, body, 'type')!;
     if (this.chromaSync) {
       const chroma = this.chromaSync;
-      const id = inserted.id;
-      chromaJobs.push(() => chroma.syncObservation(
+      const platformSource = this.sessionPlatformSource(memorySessionId);
+      chromaJobs.push(() => this.enqueueChromaWrite(`observation:${id}`, () => chroma.syncObservation(
         id,
         memorySessionId,
         project,
@@ -777,17 +1017,20 @@ export class SyncApply {
           type,
           title: fieldString(op, body, 'title'),
           subtitle: fieldString(op, body, 'subtitle'),
-          facts: parseListColumn(body.facts),
+          text: fieldString(op, body, 'text'),
+          facts: parseStringListField(fieldString(op, body, 'facts'), 'facts', id),
           narrative: fieldString(op, body, 'narrative'),
-          concepts: parseListColumn(body.concepts),
-          files_read: parseListColumn(body.files_read),
-          files_modified: parseListColumn(body.files_modified),
+          concepts: parseStringListField(fieldString(op, body, 'concepts'), 'concepts', id),
+          files_read: parseFileList(fieldString(op, body, 'files_read')),
+          files_modified: parseFileList(fieldString(op, body, 'files_modified')),
+          merged_into_project: fieldString(op, body, 'merged_into_project'),
         },
         fieldNumber(op, body, 'prompt_number') ?? 0,
-        createdAtEpoch
-      ));
+        createdAtEpoch,
+        platformSource,
+        replaceExisting
+      )));
     }
-    return 'applied';
   }
 
   private applySummary(op: SyncOp, body: Record<string, unknown>, chromaJobs: ChromaJob[]): 'applied' | 'stale' {
@@ -817,6 +1060,7 @@ export class SyncApply {
         op.rev, this.now(),
         existing.id
       );
+      this.forwardSummary(existing.id, op, body, chromaJobs, true);
       return 'applied';
     }
 
@@ -835,10 +1079,18 @@ export class SyncApply {
       createdAt, createdAtEpoch, this.now(), op.origin_device, op.origin_id, op.rev
     ) as { id: number };
 
+    this.forwardSummary(inserted.id, op, body, chromaJobs);
+    return 'applied';
+  }
+
+  private forwardSummary(id: number, op: SyncOp, body: Record<string, unknown>, chromaJobs: ChromaJob[], replaceExisting = false): void {
+    const memorySessionId = fieldString(op, body, 'memory_session_id')!;
+    const project = fieldString(op, body, 'project')!;
+    const createdAtEpoch = fieldNumber(op, body, 'created_at_epoch')!;
     if (this.chromaSync) {
       const chroma = this.chromaSync;
-      const id = inserted.id;
-      chromaJobs.push(() => chroma.syncSummary(
+      const platformSource = this.sessionPlatformSource(memorySessionId);
+      chromaJobs.push(() => this.enqueueChromaWrite(`summary:${id}`, () => chroma.syncSummary(
         id,
         memorySessionId,
         project,
@@ -849,12 +1101,14 @@ export class SyncApply {
           completed: fieldString(op, body, 'completed'),
           next_steps: fieldString(op, body, 'next_steps'),
           notes: fieldString(op, body, 'notes'),
+          merged_into_project: fieldString(op, body, 'merged_into_project'),
         },
         fieldNumber(op, body, 'prompt_number') ?? 0,
-        createdAtEpoch
-      ));
+        createdAtEpoch,
+        platformSource,
+        replaceExisting
+      )));
     }
-    return 'applied';
   }
 
   /** Resolve the local sdk_sessions id for a remote prompt, or NULL (orphan). */
@@ -908,6 +1162,7 @@ export class SyncApply {
         createdAt, createdAtEpoch, op.rev, this.now(),
         existing.id
       );
+      this.forwardPrompt(existing.id, op, body, chromaJobs);
       return 'applied';
     }
 
@@ -923,10 +1178,18 @@ export class SyncApply {
       this.now(), op.origin_device, op.origin_id, op.rev
     ) as { id: number };
 
+    this.forwardPrompt(inserted.id, op, body, chromaJobs);
+    return 'applied';
+  }
+
+  private forwardPrompt(id: number, op: SyncOp, body: Record<string, unknown>, chromaJobs: ChromaJob[]): void {
+    const contentSessionId = fieldString(op, body, 'content_session_id')!;
+    const promptText = fieldString(op, body, 'prompt_text')!;
+    const promptNumber = fieldNumber(op, body, 'prompt_number')!;
+    const createdAtEpoch = fieldNumber(op, body, 'created_at_epoch')!;
     if (this.chromaSync) {
       const chroma = this.chromaSync;
-      const id = inserted.id;
-      chromaJobs.push(() => chroma.syncUserPrompt(
+      chromaJobs.push(() => this.enqueueChromaWrite(`prompt:${id}`, () => chroma.syncUserPrompt(
         id,
         fieldString(op, body, 'memory_session_id') ?? contentSessionId,
         fieldString(op, body, 'project') ?? 'unknown',
@@ -934,9 +1197,8 @@ export class SyncApply {
         promptNumber,
         createdAtEpoch,
         fieldString(op, body, 'platform_source') ?? undefined
-      ));
+      )));
     }
-    return 'applied';
   }
 
   // -------------------------------------------------------------------------

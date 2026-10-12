@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { withRetry } from '../src/services/worker/retry';
 import { ClassifiedProviderError } from '../src/services/worker/provider-errors';
 import { CallPacer, type PacerClock } from '../src/services/worker/call-pacer';
+import { OpenAICompatProvider } from '../src/services/worker/OpenAICompatProvider';
 
 /**
  * The endpoint behind the OpenAI-compatible path answers 429 under sustained
@@ -169,5 +170,120 @@ describe('CallPacer', () => {
     await pacer.acquire(0);
 
     expect(clock.slept).toHaveLength(0);
+  });
+});
+
+/**
+ * Discrete-event clock for several concurrent callers: simulated time only
+ * advances, to the earliest pending sleep, once nothing else can progress.
+ */
+function eventClock() {
+  let now = 0;
+  const timers: Array<{ at: number; resolve: () => void }> = [];
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+  return {
+    now: () => now,
+    sleep: (ms: number) => new Promise<void>(resolve => { timers.push({ at: now + ms, resolve }); }),
+    async run<T>(work: Promise<T>): Promise<T> {
+      let settled = false;
+      work.then(() => { settled = true; }, () => { settled = true; });
+      while (!settled) {
+        await settle();
+        if (settled || timers.length === 0) continue;
+        timers.sort((a, b) => a.at - b.at);
+        const next = timers.shift()!;
+        now = Math.max(now, next.at);
+        next.resolve();
+      }
+      return work;
+    },
+  };
+}
+
+describe('openai-compatible provider against a rolling rate ceiling', () => {
+  const ENV = {
+    CLAUDE_MEM_OPENAI_COMPAT_BASE_URL: 'https://gateway.example.test/v4',
+    CLAUDE_MEM_OPENAI_COMPAT_MODEL: 'glm-test',
+    CLAUDE_MEM_OPENAI_COMPAT_API_KEY: 'compat-key',
+    // On by default; pinned so a test preload that turns it off for the
+    // upstream suite cannot turn this guard into a no-op.
+    CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED: 'true',
+  };
+  const realFetch = globalThis.fetch;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const [key, value] of Object.entries(ENV)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  /** One generator per session; every session shares the worker's pacer. */
+  function sessions(count: number, clock: ReturnType<typeof eventClock>) {
+    const pacer = new CallPacer({ now: clock.now, sleep: clock.sleep });
+    return Array.from({ length: count }, () => {
+      const provider = new OpenAICompatProvider(null as never, null as never) as any;
+      provider.pacer = pacer;
+      provider.retrySleepFn = clock.sleep;
+      return provider;
+    });
+  }
+
+  /** The gateway: 429 with no Retry-After until the window clears. */
+  function gateway(clock: ReturnType<typeof eventClock>, sends: number[]) {
+    globalThis.fetch = (async () => {
+      sends.push(clock.now());
+      return clock.now() < OUTAGE_MS
+        ? new Response('Too Many Requests', { status: 429 })
+        : Response.json({ choices: [{ message: { content: 'observation batch' } }] });
+    }) as unknown as typeof fetch;
+  }
+
+  const history = [{ role: 'user', content: 'tool use' }];
+
+  it('outlives a ~75s outage with default settings', async () => {
+    const clock = eventClock();
+    const sends: number[] = [];
+    gateway(clock, sends);
+    const [provider] = sessions(1, clock);
+
+    const result = await clock.run(provider.query(history, provider.getConfig()));
+
+    expect(result.content).toBe('observation batch');
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toBeGreaterThanOrEqual(OUTAGE_MS);
+  });
+
+  it('makes concurrent sessions share one budget and wait the window out together', async () => {
+    const clock = eventClock();
+    const sends: number[] = [];
+    gateway(clock, sends);
+    const providers = sessions(3, clock);
+
+    const results = await clock.run(Promise.all(
+      providers.map(provider => provider.query(history, provider.getConfig())),
+    ));
+
+    expect(results.map((result: { content: string }) => result.content)).toEqual(Array(3).fill('observation batch'));
+    // Each session is refused at most once: nobody retries into the closed window.
+    expect(sends).toHaveLength(6);
+    expect(sends.filter(at => at >= OUTAGE_MS)).toHaveLength(3);
+    // One shared budget: no two sends closer than the minimum interval.
+    const sorted = [...sends].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(1_500);
+    }
   });
 });
