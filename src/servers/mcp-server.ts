@@ -40,6 +40,7 @@ import {
   type ServerRuntimeContext,
 } from '../services/hooks/runtime-selector.js';
 import { normalizePlatformSource } from '../shared/platform-source.js';
+import { normalizeMemoryIds } from '../utils/memory-ids.js';
 import { getAdvertisedMcpToolsForRuntime } from './mcp-tool-visibility.js';
 import { getProjectContext, type ProjectContext } from '../utils/project-name.js';
 import { withCheckoutProjects } from './checkout-search-scope.js';
@@ -642,7 +643,10 @@ Use mem_search for every memory search. Guided mode returns readable mem-search 
     inputSchema: {
       type: 'object',
       properties: {
-        anchor: { type: 'number', description: 'Observation ID to center the timeline around' },
+        anchor: {
+          oneOf: [{ type: 'number' }, { type: 'string' }],
+          description: 'What to center the timeline around: an observation ID (number), a session id as "S1234", or an ISO timestamp'
+        },
         query: { type: 'string', description: 'Query to find anchor automatically. MUST be in English — non-English queries return unrelated results. Keep identifiers (paths, ticket ids, error strings) verbatim.' },
         depth_before: { type: 'number', description: 'Items before anchor (default 3)' },
         depth_after: { type: 'number', description: 'Items after anchor (default 3)' },
@@ -657,14 +661,14 @@ Use mem_search for every memory search. Guided mode returns readable mem-search 
   },
   {
     name: 'get_observations',
-    description: 'Legacy detail lookup for IDs already filtered through memory search or the injected session index. Prefer mem_search continuations for enforced progressive disclosure. Params: ids (array of observation IDs, required), orderBy, limit, project',
+    description: 'Legacy detail lookup for IDs already filtered through memory search or the injected session index. Prefer mem_search continuations for enforced progressive disclosure. Observation IDs are bare numbers — S#### rows are sessions (use timeline anchor "S123") and P#### are prompts (use get_prompts); those id ranges overlap with observation ids, so never strip the prefix. Params: ids (array of observation IDs, required), orderBy, limit, project',
     inputSchema: {
       type: 'object',
       properties: {
         ids: {
           type: 'array',
-          items: { type: 'number' },
-          description: 'Array of observation IDs to fetch (required)'
+          items: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+          description: 'Array of observation IDs to fetch (required). Bare numbers only — an S#### session id or P#### prompt id is rejected, not silently resolved.'
         }
       },
       required: ['ids'],
@@ -672,7 +676,8 @@ Use mem_search for every memory search. Guided mode returns readable mem-search 
     },
     annotations: READ_ONLY_TOOL_ANNOTATIONS,
     handler: async (args: any) => {
-      return await callWorker('/api/observations/batch', { body: args });
+      const ids = normalizeMemoryIds(args?.ids ?? [], 'observation');
+      return await callWorker('/api/observations/batch', { body: { ...args, ids } });
     }
   },
   {
@@ -685,8 +690,8 @@ Use mem_search for every memory search. Guided mode returns readable mem-search 
       properties: {
         ids: {
           type: 'array',
-          items: { type: 'number' },
-          description: 'Array of prompt IDs to fetch (the numeric part of #P1234), required'
+          items: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+          description: 'Array of prompt IDs to fetch — "P1234" or the bare number 1234, required. An S#### session id is rejected, not silently resolved.'
         }
       },
       required: ['ids'],
@@ -696,7 +701,8 @@ Use mem_search for every memory search. Guided mode returns readable mem-search 
     // The worker's rows are returned as-is: the purpose formatters project
     // observations only, and prompt_text in full is the point of this tool.
     handler: async (args: any) => {
-      return await callWorker('/api/prompts/batch', { body: args, text: true });
+      const ids = normalizeMemoryIds(args?.ids ?? [], 'prompt');
+      return await callWorker('/api/prompts/batch', { body: { ...args, ids }, text: true });
     }
   },
   {

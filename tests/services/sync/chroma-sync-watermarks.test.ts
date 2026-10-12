@@ -200,6 +200,77 @@ function makeStoreFromRows(
   } as any;
 }
 
+// FORK: production packs whole rows into shared writes and retries an
+// incomplete sweep; these upstream tests count per-row writes and single
+// sweeps, so they run in upstream's shape. The fork's own tests below opt in.
+beforeEach(() => {
+  ChromaSync.packBackfillRows = false;
+  ChromaSync.backfillMaxAttempts = 1;
+});
+
+describe('ChromaSync fork backfill: packed writes and sweep retry', () => {
+  const project = `watermark-fork-${Date.now()}`;
+
+  beforeEach(() => {
+    process.env.CLAUDE_MEM_DATA_DIR = mkdtempSync(join(tmpdir(), 'claude-mem-watermarks-'));
+    existingObservationIds = new Set<number>();
+    acceptingMutations = true;
+    createCollectionCalls = 0;
+    onCreateCollection = null;
+    addDocumentCalls.length = 0;
+    addDocumentPayloads.length = 0;
+    ChromaSyncState.replace(project, { observations: 0, summaries: 0, prompts: 0, pending: {} });
+  });
+
+  it('packs several rows into one write and bumps the watermark past all of them', async () => {
+    ChromaSync.packBackfillRows = true;
+    const sync = new ChromaSync(project) as ChromaSync & {
+      addDocuments: (documents: Array<{ id: string }>) => Promise<number>;
+    };
+    sync.addDocuments = async (documents) => {
+      addDocumentCalls.push(documents.map(document => document.id));
+      return documents.length;
+    };
+
+    expect(await sync.ensureBackfilled(project, makeStore(project, [1, 2, 3, 4, 5]))).toBe('completed');
+
+    expect(addDocumentCalls.length).toBe(1);
+    expect(ChromaSyncState.get(project).observations).toBe(5);
+  });
+
+  it('keeps every row of a partially written packed batch pending', async () => {
+    ChromaSync.packBackfillRows = true;
+    const sync = new ChromaSync(project) as ChromaSync & {
+      addDocuments: (documents: Array<{ id: string }>) => Promise<number>;
+    };
+    sync.addDocuments = async (documents) => documents.length - 1;
+
+    expect(await sync.ensureBackfilled(project, makeStore(project, [1, 2, 3]))).toBe('rows_pending');
+
+    expect(ChromaSyncState.get(project).observations).toBe(0);
+    expect(ChromaSyncState.getPending(project, 'observations')).toEqual([1, 2, 3]);
+  });
+
+  it('retries an incomplete sweep within the same run', async () => {
+    ChromaSync.backfillMaxAttempts = 2;
+    const previousDelay = ChromaSync.backfillRetryDelayMs;
+    ChromaSync.backfillRetryDelayMs = 0;
+    let sweeps = 0;
+    const original = ChromaSync.prototype.ensureBackfilled;
+    ChromaSync.prototype.ensureBackfilled = async function () {
+      sweeps += 1;
+      return sweeps === 1 ? 'rows_pending' : 'completed';
+    };
+    try {
+      expect(await ChromaSync.backfillAllProjects(makeStore(project, [1]))).toBe(true);
+      expect(sweeps).toBe(2);
+    } finally {
+      ChromaSync.prototype.ensureBackfilled = original;
+      ChromaSync.backfillRetryDelayMs = previousDelay;
+    }
+  });
+});
+
 describe('ChromaSync watermark gap persistence', () => {
   const project = `watermark-gap-${Date.now()}`;
 
@@ -367,6 +438,25 @@ describe('ChromaSync watermark gap persistence', () => {
     expect(writtenIds).not.toContain('obs_5_narrative');
     expect(ChromaSyncState.getPending(project, 'observations')).toEqual([]);
     expect(ChromaSyncState.get(project).observations).toBe(5);
+  });
+
+  // FORK: reconcile runs on every sweep, not only when the state file is missing.
+  it('reconciles against Chroma even when the state file already has a head watermark', async () => {
+    // The live sync path bumps the watermark to the newest id while a backfill
+    // is still walking older rows, so a saved watermark can sit above rows that
+    // were never embedded. Reconcile has to run anyway, not just on first boot.
+    existingObservationIds = new Set([1, 3, 4, 5]);
+    ChromaSyncState.replace(project, {
+      observations: 5,
+      summaries: 0,
+      prompts: 0,
+      pending: {},
+    });
+
+    await ChromaSync.backfillAllProjects(makeStore(project, [1, 2, 3, 4, 5]));
+
+    expect(addDocumentCalls.flat()).toContain('obs_2_narrative');
+    expect(ChromaSyncState.getPending(project, 'observations')).toEqual([]);
   });
 
   it('stops a backfill run after repeated batch failures instead of walking every row (#3928)', async () => {
@@ -612,11 +702,9 @@ describe('ChromaSync watermark gap persistence', () => {
     const sync = new ChromaSync(project) as ChromaSync & {
       addDocuments: (documents: Array<{ id: string }>) => Promise<number>;
     };
-    let callCount = 0;
     sync.addDocuments = async (documents) => {
       addDocumentCalls.push(documents.map(document => document.id));
-      callCount += 1;
-      return callCount === 2 ? 0 : documents.length;
+      return documents.length - 1;
     };
 
     await sync.ensureBackfilled(project, makeStoreFromRows(project, [splitRow]));

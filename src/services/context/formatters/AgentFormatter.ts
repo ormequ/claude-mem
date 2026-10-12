@@ -32,7 +32,10 @@ export function renderAgentLegend(fetchByIdSupported: boolean = true): string[] 
   // Server runtime: ids are UUIDs shown as 8-char display refs, and there is no
   // by-id fetch, so point at the server's search tool instead.
   const fetchLine = fetchByIdSupported
-    ? `Fetch details: get_observations([IDs]) | Search: mem-search skill`
+    // fork: S#### and bare observation ids share one numeric range, so a
+    // stripped prefix fetches an unrelated row that looks right (see
+    // src/utils/memory-ids.ts). Say which id goes where, in the legend.
+    ? `Fetch details: get_observations([IDs]) — bare numeric ids only | Sessions (S####): timeline({anchor:"S123"}), never get_observations | Search: mem-search skill`
     : `Fetch details: observation_search by title (short refs are display-only)`;
 
   return [
@@ -160,7 +163,7 @@ export function renderAgentFooter(
 ): string[] {
   const workTokensK = Math.round(totalDiscoveryTokens / 1000);
   const accessPath = fetchByIdSupported
-    ? 'get_observations([IDs]) or mem-search skill'
+    ? 'get_observations([IDs]) — numeric ids, not the S#### session rows — or the mem-search skill'
     : 'observation_search';
   return [
     '',
