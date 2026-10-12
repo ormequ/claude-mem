@@ -50,21 +50,3 @@ export interface QueryResult {
   session_id: string;
 }
 
-export type PrimeCorpusResult =
-  | {
-      name: string;
-      status: 'ready';
-      session_id: string;
-    }
-  | {
-      name: string;
-      status: 'queued' | 'pending';
-      message: string;
-      retry_after_seconds: number;
-    }
-  | {
-      name: string;
-      status: 'error';
-      message: string;
-      error: string;
-    };

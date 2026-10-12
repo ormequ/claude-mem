@@ -38,3 +38,15 @@ Do not re-add these on the next upstream merge. Use `codegraph explore` for
 structure. The `PreToolUse:Read` header no longer hints at any structure tool
 (it briefly pointed at `codegraph` in `a1e7180f`); `CLAUDE_MEM_SMART_TOOLS=false`
 removes the `smart_*` tools from MCP registration entirely.
+
+## State after the v13.35.0 merge
+
+Upstream now pins `tree-sitter-cli` exactly and verifies the downloaded binary's
+SHA-256; the worker provisions it itself and no-ops when the package is absent.
+The fork still generates no tree-sitter deps (`build-hooks.js`), keeps upstream's
+`allowScripts` map (harmless for absent packages) and pins `shell-quote` as
+upstream does. New fork delta: `provisionTreeSitterCli` in
+`src/npx-cli/install/setup-runtime.ts` returns false when the package is absent —
+without it `npx claude-mem repair` aborted on every run (it passes ABORT).
+`sync-marketplace.cjs` still runs `bun install --ignore-scripts` at the
+marketplace root.

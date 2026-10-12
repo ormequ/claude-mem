@@ -28,6 +28,33 @@
   independent of worktree discovery — see `chroma.md`, "merge-patch drain" — so a
   starved tick no longer loses Chroma updates, only delays SQLite adoption of
   newly-merged branches.)
+  **Since v13.35** upstream discovers repos from `sdk_sessions.cwd` (recorded
+  since migration v53), which is durable and covers what the registry was
+  added for. The registry stays as a union because v53 is new to this fork's
+  database, so every session written before the upgrade has no `cwd`; it can
+  go once those checkouts no longer matter. Discovery no longer returns early
+  when `sdk_sessions.cwd` is missing (the registry still names repos), and dead
+  registry paths are skipped by upstream's `existsSync` filter.
+  Each periodic tick that adopts something emits the same
+  `emitContextInvalidation('all', 'worktree-adoption')` the boot pass does, so
+  upstream's SessionStart context cache does not keep serving pre-adoption
+  blocks.
+- **Merged-branch detection (v13.35).** Upstream replaced `git branch --merged`
+  with commit ancestry (`merge-base --is-ancestor` of the worktree HEAD against
+  HEAD / origin/HEAD / origin/main / origin/master). Ancestry still misses
+  squash-merges, so the fork keeps `isSquashMerged` as an OR on named branches.
+  The fork's self-pointer guard was dropped: upstream now filters
+  `target.project !== parentProject` itself (#3641).
+- **Upstream now adopts deleted worktrees automatically (#2864, v13.35).** Every
+  adoption pass (boot and the hourly tick) sweeps composite keys with no live
+  checkout and folds them into the parent regardless of merge status, guarded by
+  writer evidence (`sdk_sessions.cwd`, `project_key_source`, origin device). This
+  overlaps `adopt-mem --orphans` below: the sweep does not read
+  `orphan-decisions.json`, so a declined orphan is adopted anyway by the next
+  pass. Decided at the v13.35 merge: keep upstream's sweep. The decline list
+  had never been written, so the sweep overrides no recorded decision.
+  `adopt-mem --orphans` still works unchanged, but it is now a candidate for
+  removal.
 - `adopt-mem --orphans` reviews memory left by DELETED worktrees
   (`src/services/infrastructure/OrphanAdoption.ts` + `scripts/adopt-orphans.ts`,
   both fork-owned). Every adoption path enumerates `git worktree list`
@@ -42,7 +69,8 @@
   unconditional by design (`--branch` skips the merged-check entirely,
   `WorktreeAdoption.ts:188-190`), so the tool shows facts and a human approves.
   The only upstream edit this cost: `gitCapture` and `resolveMainRepoPath` in
-  `WorktreeAdoption.ts` gained `export` (two words, nothing else).
+  `WorktreeAdoption.ts` gained `export` (two words, nothing else; since v13.35
+  `gitCapture` is a thin wrapper over upstream's `gitRun`, still exported).
   `listWorktrees` stays unexported and unreused — its upstream body never
   parses `prunable`, and teaching it to would be a behavioral delta on
   upstream logic — so the fork ships its own copy in `OrphanAdoption.ts`.
@@ -101,8 +129,43 @@
 - The column migration backfills from the pointer adoption already recorded on
   `observations`, keyed by project label — the worktree a label came from is
   usually deleted by then, so no future adoption pass would ever cover it.
+- Since v13.35 upstream scopes reads through `projectScopeSql(alias, keys,
+  { includeMerged })` with case-insensitive keys from `projectReadKeys` (one
+  merge hop). Upstream converged on the observation/summary half of the adopt
+  pointer (search filter, ID hydration, by-file, timeline), so those fork deltas
+  were dropped; the prompt reads re-apply it by passing `includeMerged: true`
+  for the `sdk_sessions` alias (`SessionSearch.searchUserPrompts`,
+  `SessionStore.getUserPromptsByIds`), plus `PaginationHelper.getPrompts`,
+  `getRecentSessionsWithStatus` and the timeline prompt scope.
 - Chroma's per-project prompt collections are still keyed by the raw session
   project. Prompt search reads SQLite on every strategy
   (`SearchManager` calls `searchUserPrompts` on the Chroma path too), so the
   read paths are correct; a semantic prompt lane over Chroma would need a
   drain like `ChromaMergeDrain`.
+
+## `project merge` (upstream, v13.35) and the fork's pointers
+
+`claude-mem project merge <from> <into>` (`src/services/infrastructure/ProjectMerge.ts`)
+stamps `merged_into_project = <into>` on `observations` / `session_summaries`
+rows with `project = <from>` that are not merged anywhere yet, the same soft
+merge adoption does (no row is rewritten or deleted). With a worker up it runs
+inside the worker (`POST /api/projects/merge`), which then invalidates the
+SessionStart context cache. The fork adds, in the same transaction:
+
+- `sdk_sessions.merged_into_project = <into>` for `<from>` sessions, so their
+  prompts follow (reported as `mergedSessions`);
+- `chroma_merge_synced_at = NULL` on the merged rows, so `ChromaMergeDrain`
+  owns the retry. Upstream still patches Chroma inline right after the commit;
+  on success the rows are stamped back off the queue, on failure they stay
+  queued and the worker's next drain patches them (no re-run needed).
+
+Side effects worth knowing before running it on real data: on a database with
+the sync columns the stamp goes through `emitRemapProject`, which bumps
+`sync_rev`, nulls `synced_at` on native rows and queues one `remap_project` op
+(purged at the next worker boot when cloud sync is not configured). Reads follow
+one hop (`projectReadKeys`), so `<into>` also sees the worktree rows adopted into
+`<from>`. To undo (worker stopped): set `merged_into_project = NULL` where
+`project = <from> AND merged_into_project = <into>` on all three tables. The
+Chroma metadata keeps `merged_into_project = <into>` until a Chroma rebuild
+(`chroma.md`), which is harmless for reads because SQLite hydration re-scopes
+every Chroma hit. Test: `tests/services/infrastructure/project-merge.test.ts`.

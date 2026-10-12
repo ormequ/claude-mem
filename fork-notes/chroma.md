@@ -57,3 +57,8 @@ harmless — the normal insert path already carries `merged_into_project`.
 
 The CLI adopt output now prints `Chroma patch: N rows queued (worker patches on
 next drain)` instead of the old updated/failed counters.
+
+Upstream's `project merge` (v13.35) feeds the same queue: its transaction nulls
+the flag on the merged rows, and its own inline Chroma patch stamps them back on
+success, so a failed patch is drained by the worker instead of waiting for a
+re-run. See `adoption.md`, "`project merge`".

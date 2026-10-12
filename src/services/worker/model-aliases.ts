@@ -1,4 +1,4 @@
-import type { SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
+import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 
 /**
  * `$TIER` alias resolution (#2289).
@@ -49,7 +49,7 @@ export function resolveTierAlias(model: string, settings: SettingsDefaults): str
 export function resolveOpenRouterQaModel(settings: SettingsDefaults): string {
   const raw = (settings.CLAUDE_MEM_OPENROUTER_QA_MODEL || '').trim();
   const resolved = raw ? resolveTierAlias(raw, settings) : '';
-  return resolved || settings.CLAUDE_MEM_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
+  return resolved || settings.CLAUDE_MEM_OPENROUTER_MODEL || SettingsDefaultsManager.get('CLAUDE_MEM_OPENROUTER_MODEL');
 }
 
 export function resolveSummaryTierModel(currentModel: string, settings: SettingsDefaults): string {

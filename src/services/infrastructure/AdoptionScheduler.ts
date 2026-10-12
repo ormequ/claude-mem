@@ -5,6 +5,7 @@
 // queries until the next restart. This timer closes that gap.
 import { adoptMergedWorktreesForAllKnownRepos } from './WorktreeAdoption.js';
 import { logger } from '../../utils/logger.js';
+import { emitContextInvalidation } from '../../shared/context-invalidation.js';
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
@@ -28,6 +29,11 @@ export function startPeriodicAdoption(
       .then(result => {
         if (Array.isArray(result) && result.length > 0) {
           logger.debug('SYSTEM', 'Periodic worktree adoption pass completed', { repos: result.length });
+          // Adopted rows change what SessionStart shows for the parent; drop
+          // the cached blocks, as the boot pass in worker-service does.
+          if (result.some(a => a?.adoptedObservations > 0 || a?.adoptedSummaries > 0 || a?.adoptedSessions > 0)) {
+            emitContextInvalidation('all', 'worktree-adoption');
+          }
         }
       })
       .catch(err => {

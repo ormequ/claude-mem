@@ -91,6 +91,18 @@ describe('cacheWorkerScriptCandidates', () => {
     expect(versions).toEqual(['13.12.0']);
   });
 
+  // FORK: the dir is named `X-fork.…` for version `X+fork.…`, and a pinned dir
+  // keeps its old name after a sync mirrors a newer build into it.
+  test('reports the version from the bundle package.json, not the dir name', () => {
+    const cacheRoot = makeCacheRoot();
+    makeVersionDir(cacheRoot, '13.35.0-fork.worker.20261012.1');
+    writeFileSync(join(cacheRoot, '13.35.0-fork.worker.20261012.1', 'package.json'), JSON.stringify({ version: '13.35.0+fork.worker.20261012.1' }));
+    makeVersionDir(cacheRoot, '13.12.0');
+
+    const versions = cacheWorkerScriptCandidates(cacheRoot).map(candidate => candidate.version).sort();
+    expect(versions).toEqual(['13.12.0', '13.35.0+fork.worker.20261012.1']);
+  });
+
   test('returns an empty list for a missing cache root', () => {
     expect(cacheWorkerScriptCandidates(join(tmpdir(), 'claude-mem-no-such-cache'))).toEqual([]);
   });

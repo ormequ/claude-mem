@@ -38,9 +38,9 @@ conflict. Merge from the recorded base instead — the upstream commit this tree
 was last merged with:
 
 ```
-fork base: 132b4634  ("docs: update changelog for v13.12.4", upstream v13.12.4)
+fork base: 93ca2a86  ("fix(dedup): veto a near-dup token sitting at exactly idfVetoDf records", upstream v13.35.0 + 2)
 git fetch upstream main --no-tags --filter=blob:none
-git diff 132b4634..upstream/main | git apply -3      # 3-way: conflicts only where both moved
+git diff 93ca2a86..upstream/main | git apply -3      # 3-way: conflicts only where both moved
 ```
 
 **Update the recorded base to the new upstream tip every time upstream is
@@ -64,7 +64,8 @@ can move it.
 
 Two aggravating details:
 
-- `sync-marketplace.cjs` only mirrors into the build's own cache dir, the raw
+- `sync-marketplace.cjs` (rsync replaced by upstream's `mirrorDirectory` in
+  v13.35.0; the fork's dir set is unchanged) only mirrors into the build's own cache dir, the raw
   `+` variant, and the *running worker's* dir (`getActiveCacheVersion`). A dir
   Claude Code pinned on its own is not in that set, so a normal
   `build-and-sync` does not repair the situation and reports success.
@@ -98,3 +99,17 @@ The version there must carry `+fork.worker.`. If it does not, the running plugin
 is upstream. Repair by mirroring `plugin/` into the pinned dir, re-running
 `bun install` there, and re-filtering skills to the chosen set — then restart
 the worker.
+
+## Fork version scheme
+
+`<upstream version>+fork.worker.<YYYYMMDD>.<n>`, set by hand in `package.json`,
+`plugin/package.json` (or regenerate it with the build), `.claude-plugin/`
+`marketplace.json` + `plugin.json`, `plugin/.claude-plugin/plugin.json`, both
+`.codex-plugin/plugin.json` files, and the two `.cursor-plugin/plugin.json`
+manifests (`claude-mem-cursor`, `claude-mem-grok-bot`) that
+`tests/infrastructure/version-consistency.test.ts` checks. Other harness manifests
+(openclaw, dsh, `.grok-plugin`) keep upstream's version. Upstream's own
+marketplace name appears in new upstream code on every merge
+(`claude-mem@thedotmack`, `cache/thedotmack`): grep for it and rename where it
+addresses this install — `prune-cache.ts` keyed its protected version off it,
+which would have pruned the pinned fork dir.
