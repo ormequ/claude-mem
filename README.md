@@ -5,7 +5,22 @@
 > This repository is a personal fork with local fixes and different defaults. Nothing
 > here is upstream's responsibility. What differs and why: [`FORK_NOTES.md`](FORK_NOTES.md).
 >
-> Last upstream version merged in: **v13.12.4** (`132b4634`).
+> Last upstream version merged in: **v13.35.0** (`93ca2a86`).
+
+## What this fork adds
+
+| Change | Why | Notes |
+|---|---|---|
+| Cross-harness memory reads | A project's memory is the project's, not the harness's — a session in any harness sees all of it | [`cross-harness-reads.md`](fork-notes/cross-harness-reads.md) |
+| Merged-worktree adoption | Memory written in a worktree used to disappear with the worktree; an hourly pass re-points it at the parent project | [`adoption.md`](fork-notes/adoption.md) |
+| Chroma backfill reliability | Watermarks reconciled against Chroma itself, one timed-out call no longer kills the batch, corruption recovery runbook | [`chroma.md`](fork-notes/chroma.md) |
+| Request pacing for OpenAI-compatible providers | A rolling request ceiling instead of a dropped batch when the provider rate-limits | [`provider-rate-limits.md`](fork-notes/provider-rate-limits.md) |
+| `harness-review` skill | Measures whether the harness is improving: correction rate, re-derived facts, silently worked-around errors | [`prompts-and-harness-review.md`](fork-notes/prompts-and-harness-review.md) |
+| Narrower install defaults | Telemetry off, a `compact` skill set, `smart_*` MCP tools behind an env gate | [`install-defaults.md`](fork-notes/install-defaults.md) |
+| Observation quality gates | Concept vocabulary enforced at parse time, type fallbacks, empty-concept injection gate | [`observations.md`](fork-notes/observations.md) |
+
+Installing this fork: [`INSTALL_FORK.md`](INSTALL_FORK.md). Upgrading it against a
+new upstream release: [`upgrade-checklist.md`](fork-notes/upgrade-checklist.md).
 
 <h1 align="center">
   <br>
