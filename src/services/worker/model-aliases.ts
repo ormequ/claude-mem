@@ -9,7 +9,7 @@ import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/Set
  * so users can edit settings without restarting the worker.
  *
  * Pure function: does not mutate `settings`. Non-tier input passes through
- * unchanged (e.g. `claude-haiku-4-5-20251001`).
+ * unchanged (e.g. `claude-haiku-5-5`).
  */
 const TIER_PATTERN = /^\$TIER:(fast|smart|simple|summary)$/;
 

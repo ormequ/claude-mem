@@ -631,7 +631,7 @@ export function ContextSettingsModal({
                       type="text"
                       value={formState.CLAUDE_MEM_QUOTA_FALLBACK_MODEL || ''}
                       onChange={(e) => updateSetting('CLAUDE_MEM_QUOTA_FALLBACK_MODEL', e.target.value)}
-                      placeholder="e.g., claude-haiku-4-5-20251001"
+                      placeholder="e.g., claude-haiku-5-5"
                     />
                   </FormField>
                 </>

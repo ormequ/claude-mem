@@ -1471,7 +1471,7 @@ async function configureOpenAICompatible(): Promise<ProviderId> {
 
 async function promptClaudeModel(options: InstallOptions): Promise<void> {
   const allowed = new Set([
-    'claude-haiku-4-5-20251001',
+    'claude-haiku-5-5',
     'claude-sonnet-5',
     'claude-opus-4-8',
   ]);
@@ -1504,8 +1504,8 @@ async function promptClaudeModel(options: InstallOptions): Promise<void> {
   if (allowCustomModel) {
     const result = await p.text({
       message: 'Which model should the gateway use?',
-      placeholder: 'claude-haiku-4-5-20251001',
-      defaultValue: initialModel || 'claude-haiku-4-5-20251001',
+      placeholder: 'claude-haiku-5-5',
+      defaultValue: initialModel || 'claude-haiku-5-5',
       validate: (v?: string) => (!v || v.trim().length === 0) ? 'Model required' : undefined,
     });
 
@@ -1522,12 +1522,12 @@ async function promptClaudeModel(options: InstallOptions): Promise<void> {
     return;
   }
 
-  const initialValue = allowed.has(initialModel) ? initialModel : 'claude-haiku-4-5-20251001';
+  const initialValue = allowed.has(initialModel) ? initialModel : 'claude-haiku-5-5';
 
   const result = await p.select<string>({
     message: 'Which Claude model should claude-mem use to compress observations?\nThis runs whenever you and Claude touch a file — keep it cheap and fast.',
     options: [
-      { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (recommended — fast, cheap, great for compression)' },
+      { value: 'claude-haiku-5-5', label: 'Haiku 5.5 (recommended — fast, cheap, great for compression)' },
       { value: 'claude-sonnet-5', label: 'Sonnet 5 (balanced quality and cost)' },
       { value: 'claude-opus-4-8', label: 'Opus 4.8 (highest quality, slowest)' },
     ],
