@@ -62,8 +62,8 @@ interface WorktreeEntry {
  * not because any current case depends on it — verified by mutation testing
  * 2026-07-21.
  */
-function listWorktrees(mainRepo: string): WorktreeEntry[] {
-  const raw = gitCapture(mainRepo, ['worktree', 'list', '--porcelain']);
+async function listWorktrees(mainRepo: string): Promise<WorktreeEntry[]> {
+  const raw = await gitCapture(mainRepo, ['worktree', 'list', '--porcelain']);
   if (!raw) return [];
 
   const entries: WorktreeEntry[] = [];
@@ -97,11 +97,11 @@ function isLive(entry: WorktreeEntry): boolean {
  * second clone or a backup collides. Resolving to one arbitrary winner would
  * make the loser's live worktrees look deleted.
  */
-function resolveParentRepos(dataDirectory: string, repoPath?: string): Map<string, Set<string>> {
+async function resolveParentRepos(dataDirectory: string, repoPath?: string): Promise<Map<string, Set<string>>> {
   const byName = new Map<string, Set<string>>();
   const seeds = repoPath ? [repoPath, ...listKnownCwds(dataDirectory)] : listKnownCwds(dataDirectory);
   for (const cwd of seeds) {
-    const root = resolveMainRepoPath(cwd);
+    const root = await resolveMainRepoPath(cwd);
     if (!root) continue;
     const name = getProjectContext(root).primary;
     if (!byName.has(name)) byName.set(name, new Set());
@@ -151,14 +151,14 @@ function readUnadoptedProjects(dbPath: string): ProjectRow[] {
   }
 }
 
-export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } = {}): OrphanScanResult {
+export async function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } = {}): Promise<OrphanScanResult> {
   const dataDirectory = opts.dataDirectory ?? paths.dataDir();
   const dbPath = path.join(dataDirectory, 'claude-mem.db');
 
   const result: OrphanScanResult = { orphans: [], live: [], skipped: [], ambiguousParents: [] };
   if (!existsSync(dbPath)) return result;
 
-  const parentRepos = resolveParentRepos(dataDirectory, opts.repoPath);
+  const parentRepos = await resolveParentRepos(dataDirectory, opts.repoPath);
   for (const [name, roots] of parentRepos) {
     if (roots.size > 1) result.ambiguousParents.push(name);
   }
@@ -168,7 +168,7 @@ export function scanOrphans(opts: { dataDirectory?: string; repoPath?: string } 
   for (const [name, roots] of parentRepos) {
     const live = new Set<string>();
     for (const root of roots) {
-      for (const entry of listWorktrees(root)) {
+      for (const entry of await listWorktrees(root)) {
         if (entry.path === root || !isLive(entry)) continue;
         live.add(getProjectContext(entry.path).primary);
       }

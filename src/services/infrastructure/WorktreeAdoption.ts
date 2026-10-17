@@ -1,11 +1,12 @@
 
 import path from 'path';
 import { existsSync } from 'fs';
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { logger } from '../../utils/logger.js';
 import { getPathModeProjectContext, getProjectContext } from '../../utils/project-name.js';
 import { emitRemapProject, hasSyncLane } from '../sync/remap-outbox.js';
 import { paths } from '../../shared/paths.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { listKnownCwds } from './KnownCwdRegistry.js';
 
@@ -59,10 +60,117 @@ interface WorktreeEntry {
 interface GitCommandResult {
   status: number | null;
   stdout: string;
+  stderr: string;
   error: Error | undefined;
 }
 
 const GIT_TIMEOUT_MS = 15000;
+
+/** Extra wait for git to exit after the SIGTERM, before we stop waiting. */
+const GIT_KILL_GRACE_MS = 5000;
+
+function gitTimeoutError(): Error {
+  const error = new Error('spawn git ETIMEDOUT');
+  error.name = 'ETIMEDOUT';
+  return error;
+}
+
+/**
+ * Run git without holding the event loop.
+ *
+ * This used to be `spawnSync` with `timeout: GIT_TIMEOUT_MS`, so a single git
+ * call on a slow or sleeping volume froze the worker's event loop for the
+ * whole timeout. Adoption shares that loop with `/api/health`: the health
+ * endpoint went silent for up to 15 s per git call, hooks reclaimed the worker
+ * as wedged, and every restart re-ran adoption and the Chroma backfill
+ * (#4741). Async (spawn, not spawnSync), like runNpmStrict in
+ * npx-cli/install/npm-install-helper.ts, keeping the timeout, the error
+ * classification and windowsHide semantics of the spawnSync it replaces.
+ */
+function spawnGit(cwd: string, args: string[]): Promise<GitCommandResult> {
+  return new Promise(resolve => {
+    const child = spawn('git', ['-C', cwd, ...args], { windowsHide: true });
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    let stdout = '';
+    let stderr = '';
+    let spawnError: Error | undefined;
+    let timedOut = false;
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (result: GitCommandResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(result);
+    };
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      // A volume that fell asleep can leave git ignoring SIGTERM; stop
+      // waiting either way — an unsettled promise would strand the sweep.
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        settle({ status: null, stdout: '', stderr: '', error: gitTimeoutError() });
+      }, GIT_KILL_GRACE_MS);
+    }, GIT_TIMEOUT_MS);
+
+    child.on('error', err => {
+      spawnError = err;
+    });
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('close', code => {
+      if (timedOut) {
+        settle({ status: null, stdout: '', stderr: '', error: gitTimeoutError() });
+        return;
+      }
+      if (spawnError) {
+        settle({ status: null, stdout: '', stderr: '', error: spawnError });
+        return;
+      }
+      settle({ status: code, stdout, stderr, error: undefined });
+    });
+  });
+}
+
+async function gitRun(cwd: string, args: string[]): Promise<GitCommandResult> {
+  const startTime = Date.now();
+  const r = await spawnGit(cwd, args);
+  const duration = Date.now() - startTime;
+
+  if (duration > 1000) {
+    logger.debug('GIT', `Slow git operation: git -C ${cwd} ${args.join(' ')} took ${duration}ms`);
+  }
+
+  if (r.error) {
+    logger.warn('GIT', `Git operation failed: git -C ${cwd} ${args.join(' ')}`, {
+      error: r.error.message,
+      timedOut: r.error.name === 'ETIMEDOUT'
+    });
+    return { status: r.status, stdout: '', stderr: '', error: r.error };
+  }
+
+  if (r.status !== 0) {
+    logger.debug('GIT', `Git returned non-zero exit code ${r.status}: git -C ${cwd} ${args.join(' ')}`, {
+      stderr: r.stderr.trim()
+    });
+    return { status: r.status, stdout: '', stderr: r.stderr, error: undefined };
+  }
+  return { status: r.status, stdout: r.stdout.trim(), stderr: r.stderr, error: undefined };
+}
+
+export async function gitCapture(cwd: string, args: string[]): Promise<string | null> {
+  const result = await gitRun(cwd, args);
+  return result.status === 0 ? result.stdout : null;
+}
 
 class DryRunRollback extends Error {
   constructor() {
@@ -71,43 +179,8 @@ class DryRunRollback extends Error {
   }
 }
 
-function gitRun(cwd: string, args: string[]): GitCommandResult {
-  const startTime = Date.now();
-  const r = spawnSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
-    windowsHide: true
-  });
-  const duration = Date.now() - startTime;
-  
-  if (duration > 1000) {
-    logger.debug('GIT', `Slow git operation: git -C ${cwd} ${args.join(' ')} took ${duration}ms`);
-  }
-
-  if (r.error) {
-    logger.warn('GIT', `Git operation failed: git -C ${cwd} ${args.join(' ')}`, {
-      error: r.error.message,
-      timedOut: r.error.name === 'ETIMEDOUT' || (r.status === null && r.signal === 'SIGTERM')
-    });
-    return { status: r.status, stdout: '', error: r.error };
-  }
-
-  if (r.status !== 0) {
-    logger.debug('GIT', `Git returned non-zero exit code ${r.status}: git -C ${cwd} ${args.join(' ')}`, {
-      stderr: r.stderr?.toString().trim()
-    });
-    return { status: r.status, stdout: '', error: undefined };
-  }
-  return { status: r.status, stdout: (r.stdout ?? '').trim(), error: undefined };
-}
-
-export function gitCapture(cwd: string, args: string[]): string | null {
-  const result = gitRun(cwd, args);
-  return result.status === 0 ? result.stdout : null;
-}
-
-export function resolveMainRepoPath(cwd: string): string | null {
-  const commonDir = gitCapture(cwd, [
+export async function resolveMainRepoPath(cwd: string): Promise<string | null> {
+  const commonDir = await gitCapture(cwd, [
     'rev-parse',
     '--path-format=absolute',
     '--git-common-dir'
@@ -132,8 +205,8 @@ export function resolveMainRepoPath(cwd: string): string | null {
   return existsSync(mainRoot) ? mainRoot : null;
 }
 
-function listWorktrees(mainRepo: string): WorktreeEntry[] {
-  const raw = gitCapture(mainRepo, ['worktree', 'list', '--porcelain']);
+async function listWorktrees(mainRepo: string): Promise<WorktreeEntry[]> {
+  const raw = await gitCapture(mainRepo, ['worktree', 'list', '--porcelain']);
   if (!raw) return [];
 
   const entries: WorktreeEntry[] = [];
@@ -311,8 +384,8 @@ function wasWrittenUnderRepository(
  * like a deleted worktree to the orphan sweep. Existence-filtered, so a deleted
  * submodule is still adopted (#2842).
  */
-function listSubmodulePaths(mainRepo: string): string[] {
-  const raw = gitCapture(mainRepo, ['submodule', 'status', '--recursive']);
+async function listSubmodulePaths(mainRepo: string): Promise<string[]> {
+  const raw = await gitCapture(mainRepo, ['submodule', 'status', '--recursive']);
   if (!raw) return [];
 
   const paths: string[] = [];
@@ -327,18 +400,18 @@ function listSubmodulePaths(mainRepo: string): string[] {
   return paths;
 }
 
-function resolveCandidateOids(mainRepo: string): Set<string> {
+async function resolveCandidateOids(mainRepo: string): Promise<Set<string>> {
   const oids = new Set<string>();
   for (const ref of ['HEAD', 'origin/HEAD', 'origin/main', 'origin/master']) {
-    const result = gitRun(mainRepo, ['rev-parse', '--verify', `${ref}^{commit}`]);
+    const result = await gitRun(mainRepo, ['rev-parse', '--verify', `${ref}^{commit}`]);
     if (result.status === 0 && result.stdout) oids.add(result.stdout);
   }
   return oids;
 }
 
-export function hasProvenAncestry(mainRepo: string, worktreeHead: string, candidateOids: Set<string>): boolean {
+export async function hasProvenAncestry(mainRepo: string, worktreeHead: string, candidateOids: Set<string>): Promise<boolean> {
   for (const candidateOid of candidateOids) {
-    const result = gitRun(mainRepo, ['merge-base', '--is-ancestor', worktreeHead, candidateOid]);
+    const result = await gitRun(mainRepo, ['merge-base', '--is-ancestor', worktreeHead, candidateOid]);
     if (result.status === 0 && !result.error) return true;
     // Status 1 is a known negative. Spawn failures and other statuses remain
     // conservative by simply leaving this worktree unselected.
@@ -353,14 +426,14 @@ export function hasProvenAncestry(mainRepo: string, worktreeHead: string, candid
 // patch. "-" prefix = already applied → the branch content lives in HEAD.
 // ponytail: commit-tree writes one dangling loose object per branch; harmless,
 // gc-eligible. Covers merge-commit + squash, not rebase-and-merge.
-function isSquashMerged(mainRepo: string, branch: string): boolean {
-  const mergeBase = gitCapture(mainRepo, ['merge-base', 'HEAD', branch]);
+async function isSquashMerged(mainRepo: string, branch: string): Promise<boolean> {
+  const mergeBase = await gitCapture(mainRepo, ['merge-base', 'HEAD', branch]);
   if (!mergeBase) return false;
-  const tree = gitCapture(mainRepo, ['rev-parse', `${branch}^{tree}`]);
+  const tree = await gitCapture(mainRepo, ['rev-parse', `${branch}^{tree}`]);
   if (!tree) return false;
-  const synthetic = gitCapture(mainRepo, ['commit-tree', tree, '-p', mergeBase, '-m', '_']);
+  const synthetic = await gitCapture(mainRepo, ['commit-tree', tree, '-p', mergeBase, '-m', '_']);
   if (!synthetic) return false;
-  const cherry = gitCapture(mainRepo, ['cherry', 'HEAD', synthetic]);
+  const cherry = await gitCapture(mainRepo, ['cherry', 'HEAD', synthetic]);
   if (cherry === null) return false;
   return cherry.split('\n').every(line => line === '' || line.startsWith('-'));
 }
@@ -375,7 +448,7 @@ export async function adoptMergedWorktrees(opts: {
   const dryRun = opts.dryRun ?? false;
   const startCwd = opts.repoPath ?? process.cwd();
 
-  const mainRepo = resolveMainRepoPath(startCwd);
+  const mainRepo = await resolveMainRepoPath(startCwd);
   // Worktree and submodule composites (`<repo>/<worktree>`) are folder-based
   // keys, so the sweep works on the repository's folder-based key whatever
   // names the repository now: with a git-remote slug (#2827), rows a worktree
@@ -409,7 +482,7 @@ export async function adoptMergedWorktrees(opts: {
     return result;
   }
 
-  const allWorktrees = listWorktrees(mainRepo);
+  const allWorktrees = await listWorktrees(mainRepo);
   const childWorktrees = allWorktrees.filter(w => w.path !== mainRepo);
   result.scannedWorktrees = childWorktrees.length;
 
@@ -417,16 +490,23 @@ export async function adoptMergedWorktrees(opts: {
   if (opts.onlyBranch) {
     targets = childWorktrees.filter(w => w.branch === opts.onlyBranch);
   } else {
-    const candidateOids = resolveCandidateOids(mainRepo);
-    targets = childWorktrees.filter(w =>
-      w.head !== null &&
+    const candidateOids = await resolveCandidateOids(mainRepo);
+    targets = [];
+    // Sequential like the pre-async filter: one merge-base probe per
+    // candidate, in order, short-circuiting on the same predicates.
+    for (const w of childWorktrees) {
+      if (w.head === null) continue;
       // A branch at the current parent tip is a valid existing worktree;
       // detached exact-tip checkouts are fresh inspection worktrees.
-      (w.branch !== null || !candidateOids.has(w.head)) &&
-      (hasProvenAncestry(mainRepo, w.head, candidateOids) ||
+      if (w.branch === null && candidateOids.has(w.head)) continue;
+      if (
+        (await hasProvenAncestry(mainRepo, w.head, candidateOids)) ||
         // FORK: ancestry misses squash-merges (fresh SHA on the parent).
-        (w.branch !== null && isSquashMerged(mainRepo, w.branch)))
-    );
+        (w.branch !== null && (await isSquashMerged(mainRepo, w.branch)))
+      ) {
+        targets.push(w);
+      }
+    }
   }
 
   result.mergedBranches = targets
@@ -534,7 +614,7 @@ export async function adoptMergedWorktrees(opts: {
     // Every key a live checkout writes, folder-based and current (a slug can
     // sit under the folder key's prefix: `acme/acme`), plus the repository's
     // own current key: the sweep never adopts what a live checkout still writes.
-    const liveCheckouts = [...childWorktrees.map(w => w.path), ...listSubmodulePaths(mainRepo)];
+    const liveCheckouts = [...childWorktrees.map(w => w.path), ...(await listSubmodulePaths(mainRepo))];
     const liveWorktreeProjects = new Set([
       currentProject,
       ...liveCheckouts.flatMap(checkout => [
@@ -634,9 +714,10 @@ export async function adoptMergedWorktreesForAllKnownRepos(opts: {
     return results;
   }
 
-  // The worker starts this sweep fire-and-forget at boot, and everything below
-  // (git spawns, SQLite) is synchronous: yield before starting and between
-  // repositories so the worker keeps serving requests meanwhile (gate P2-3).
+  // The worker starts this sweep fire-and-forget at boot. The git runs below
+  // no longer block the loop (#4741), but the SQLite reads are still
+  // synchronous: yield before starting and between repositories so the worker
+  // keeps serving requests meanwhile (gate P2-3).
   await yieldToEventLoop();
 
   let recordedCwds: string[] = [];
@@ -680,7 +761,7 @@ export async function adoptMergedWorktreesForAllKnownRepos(opts: {
   const uniqueParents = new Set<string>();
   for (const cwd of new Set([...recordedCwds, ...listKnownCwds(dataDirectory)])) {
     if (!existsSync(cwd)) continue;
-    const mainRepo = resolveMainRepoPath(cwd);
+    const mainRepo = await resolveMainRepoPath(cwd);
     if (mainRepo) uniqueParents.add(mainRepo);
   }
 

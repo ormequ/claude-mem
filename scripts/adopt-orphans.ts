@@ -37,7 +37,7 @@ if (!repoEqualsArg && repoIndex !== -1 && (!repoPath || repoPath.startsWith('--'
 // "not resolvable — pass --repo <path>" skip message as not passing --repo at
 // all, which is confusing when the user just typed --repo. Say plainly what's
 // wrong with the given path up front.
-if (repoPath && !resolveMainRepoPath(repoPath)) {
+if (repoPath && !(await resolveMainRepoPath(repoPath))) {
   console.error(`! --repo ${repoPath} did not resolve to a git repository`);
 }
 
@@ -72,9 +72,9 @@ const line = (c: OrphanCandidate) =>
 // stack trace — surface the same plain-language "database is locked" message
 // the adopt loop below uses for that specific error, and a generic one
 // otherwise, and exit non-zero so a failed run never looks like a clean one.
-let result: ReturnType<typeof scanOrphans>;
+let result: Awaited<ReturnType<typeof scanOrphans>>;
 try {
-  result = scanOrphans({ repoPath });
+  result = await scanOrphans({ repoPath });
 } catch (error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('database is locked')) {
