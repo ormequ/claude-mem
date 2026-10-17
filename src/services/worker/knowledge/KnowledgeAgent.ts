@@ -2,6 +2,7 @@
 import { CorpusStore } from './CorpusStore.js';
 import { CorpusRenderer } from './CorpusRenderer.js';
 import type { CorpusFile, QueryResult } from './types.js';
+import { pinnedProviderFor } from '../../../shared/project-providers.js';
 import { logger } from '../../../utils/logger.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
@@ -87,7 +88,7 @@ export class KnowledgeAgent {
   }
 
   async prime(corpus: CorpusFile, callOptions: KnowledgeAgentCallOptions = {}): Promise<string> {
-    const endpoint = await this.chatCompletionsEndpoint();
+    const endpoint = await this.chatCompletionsEndpoint(corpus);
     if (endpoint) {
       // No Claude session to expire here, so an existing one stays valid.
       if (corpus.session_id) {
@@ -183,7 +184,7 @@ export class KnowledgeAgent {
       throw new Error(`Corpus "${corpus.name}" has no session — call prime first`);
     }
 
-    const endpoint = await this.chatCompletionsEndpoint();
+    const endpoint = await this.chatCompletionsEndpoint(corpus);
     if (endpoint) {
       const result = await this.queryChatCompletionsCorpus(endpoint, corpus, question, callOptions.abortController?.signal);
       return { answer: result.answer, session_id: corpus.session_id };
@@ -293,9 +294,13 @@ export class KnowledgeAgent {
    * OpenAI-compatible /chat/completions endpoint instead of the Claude SDK, so
    * it needs no Claude OAuth. Null for every other provider; throws when the
    * selected HTTP provider is not configured, rather than spending a Claude
-   * subscription the user did not pick.
+   * subscription the user did not pick. Null too when the corpus holds a project
+   * pinned to Claude (CLAUDE_MEM_PROJECT_PROVIDERS), so its data stays there.
    */
-  private async chatCompletionsEndpoint(): Promise<ChatCompletionsEndpoint | null> {
+  private async chatCompletionsEndpoint(corpus: CorpusFile): Promise<ChatCompletionsEndpoint | null> {
+    const projects = new Set([corpus.filter.project, ...corpus.observations.map((o) => o.project)]);
+    if ([...projects].some((project) => pinnedProviderFor(project) === 'claude')) return null;
+
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
 
     if (settings.CLAUDE_MEM_PROVIDER === 'openai-compatible') {

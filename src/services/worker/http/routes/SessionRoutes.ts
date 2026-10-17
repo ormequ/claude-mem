@@ -148,11 +148,11 @@ export class SessionRoutes extends BaseRouteHandler {
     const activeSession = this.sessionManager.getSession(input.sessionDbId);
     const selection = activeSession?.currentProvider
       ? { provider: activeSession.currentProvider, gatewayProbeClaimId: null }
-      : selectProviderForGenerator();
+      : selectProviderForGenerator(input.project);
     // Fork: never format on the Claude subscription for a provider the user
     // selected but has not configured (see ensureGeneratorRunningLocked).
     const unconfigured = selection.provider === 'claude' && !activeSession?.currentProvider
-      ? selectedProviderUnconfigured()
+      ? selectedProviderUnconfigured(input.project)
       : null;
     if (unconfigured) {
       releaseCmemGatewayProbe(selection.gatewayProbeClaimId);
@@ -269,7 +269,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
     // The claiming variant: this path is about to SEND, so it must take the
     // single gateway re-probe rather than merely reading the clock.
-    const selection = selectProviderForGenerator();
+    const selection = selectProviderForGenerator(session.project);
     const selectedProvider = selection.provider;
 
     // Fork: dispatch falls through to Claude when the selected HTTP provider is
@@ -280,7 +280,7 @@ export class SessionRoutes extends BaseRouteHandler {
     // the periodic resume sweep retries it once the settings are filled in.
     // ponytail: the in-RAM buffer grows until the provider is configured or the
     // worker restarts; cap or spill it if unconfigured installs linger for days.
-    const unconfigured = selectedProvider === 'claude' ? selectedProviderUnconfigured() : null;
+    const unconfigured = selectedProvider === 'claude' ? selectedProviderUnconfigured(session.project) : null;
     if (unconfigured) {
       releaseCmemGatewayProbe(selection.gatewayProbeClaimId);
       if (Date.now() - this.lastUnconfiguredWarnAt >= UNCONFIGURED_PROVIDER_WARN_INTERVAL_MS) {

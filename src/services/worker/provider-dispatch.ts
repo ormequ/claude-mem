@@ -34,6 +34,7 @@ import { isGeminiAvailable, isGeminiSelected } from './GeminiProvider.js';
 import { isOpenRouterAvailable, isOpenRouterSelected } from './OpenRouterProvider.js';
 import { isOpenAICompatAvailable, isOpenAICompatSelected } from './OpenAICompatProvider.js';
 import { isCodexSelected } from './CodexProvider.js';
+import { pinnedProviderFor } from '../../shared/project-providers.js';
 import { isClassified, type ClassifiedProviderError } from './provider-errors.js';
 import { canClaudeServeAsFallback } from '../../shared/claude-fallback-readiness.js';
 import {
@@ -315,9 +316,11 @@ function selectWithQuotaFallback(primary: SelectableProvider): ProviderSelection
  * Dispatch below falls through to 'claude' in that state, which would bill the
  * Claude subscription for memory the user routed elsewhere; callers that are
  * about to send idle instead (SessionRoutes). Null when the selected provider is
- * configured, or is claude/codex. `missing` names the settings to fill in.
+ * configured, or is claude/codex, or `project` is pinned (it never falls
+ * through). `missing` names the settings to fill in.
  */
-export function selectedProviderUnconfigured(): { provider: SelectableProvider; missing: string } | null {
+export function selectedProviderUnconfigured(project?: string | null): { provider: SelectableProvider; missing: string } | null {
+  if (pinnedProviderFor(project)) return null;
   if (isOpenRouterSelected() && !isOpenRouterAvailable()) {
     return { provider: 'openrouter', missing: 'CLAUDE_MEM_OPENROUTER_API_KEY' };
   }
@@ -343,7 +346,9 @@ export function resetQuotaFallbackStateForTesting(): void {
  * is safe to call from anywhere — but a caller about to actually SEND must use
  * `selectProviderForGenerator` instead, or it becomes part of the herd.
  */
-export function getSelectedProvider(): SelectableProvider {
+export function getSelectedProvider(project?: string | null): SelectableProvider {
+  const pinned = pinnedProviderFor(project);
+  if (pinned) return pinned;
   if (isCodexSelected()) return applyQuotaFallback('codex').provider;
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
@@ -412,7 +417,9 @@ setUnservableProviderRouter((provider, message, window, profile) =>
  * because while the fallback stands memory runs on the Anthropic plan, which
  * is not a pause.
  */
-export function selectProviderForGenerator(): ProviderSelection {
+export function selectProviderForGenerator(project?: string | null): ProviderSelection {
+  const pinned = pinnedProviderFor(project);
+  if (pinned) return { provider: pinned, gatewayProbeClaimId: null };
   if (isCodexSelected()) return selectWithQuotaFallback('codex');
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());

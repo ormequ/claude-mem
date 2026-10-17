@@ -65,6 +65,7 @@ const ENV_KEYS = [
   'CLAUDE_MEM_OPENAI_COMPAT_MODEL',
   'CLAUDE_MEM_OPENAI_COMPAT_API_KEY',
   'CLAUDE_MEM_OPENAI_COMPAT_API_KEYS',
+  'CLAUDE_MEM_PROJECT_PROVIDERS',
 ] as const;
 
 describe('provider-dispatch', () => {
@@ -100,6 +101,43 @@ describe('provider-dispatch', () => {
         : PERSONAL_KEY;
     }
   }
+
+  describe('project pins (CLAUDE_MEM_PROJECT_PROVIDERS)', () => {
+    beforeEach(() => {
+      process.env.CLAUDE_MEM_PROVIDER = 'openai-compatible';
+      process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL = 'https://llm.example.test/v1';
+      process.env.CLAUDE_MEM_OPENAI_COMPAT_MODEL = 'some-model';
+      process.env.CLAUDE_MEM_OPENAI_COMPAT_API_KEY = 'sk-test';
+      process.env.CLAUDE_MEM_PROJECT_PROVIDERS = '{"personal":"claude"}';
+    });
+
+    it('routes the pinned project and its worktrees to the pinned provider', () => {
+      for (const project of ['personal', 'personal/feature-x']) {
+        expect(selectProviderForGenerator(project).provider).toBe('claude');
+        expect(getSelectedProvider(project)).toBe('claude');
+      }
+    });
+
+    it('leaves other projects, look-alike names and unknown sessions on the global provider', () => {
+      for (const project of ['main', 'personal-site', undefined]) {
+        expect(selectProviderForGenerator(project).provider).toBe('openai-compatible');
+      }
+    });
+
+    it('never reports a pinned project as idle on an unconfigured global provider', () => {
+      delete process.env.CLAUDE_MEM_OPENAI_COMPAT_API_KEY;
+      process.env.CLAUDE_MEM_OPENAI_COMPAT_BASE_URL = '';
+      expect(selectedProviderUnconfigured('personal')).toBeNull();
+      expect(selectedProviderUnconfigured('main')?.provider).toBe('openai-compatible');
+    });
+
+    it('ignores invalid JSON and unknown provider names', () => {
+      process.env.CLAUDE_MEM_PROJECT_PROVIDERS = '{personal:claude';
+      expect(getSelectedProvider('personal')).toBe('openai-compatible');
+      process.env.CLAUDE_MEM_PROJECT_PROVIDERS = '{"personal":"anthropic"}';
+      expect(getSelectedProvider('personal')).toBe('openai-compatible');
+    });
+  });
 
   describe('getSelectedProvider', () => {
     it('returns openrouter when selected, keyed, and no fallback is recorded', () => {
