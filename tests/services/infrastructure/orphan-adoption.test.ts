@@ -106,12 +106,12 @@ afterAll(() => {
 });
 
 describe('scanOrphans', () => {
-  it('classifies a project with a live worktree as live, not orphan', () => {
+  it('classifies a project with a live worktree as live, not orphan', async () => {
     const { mainRepo, worktree } = makeRepoWithWorktree('demo', 'feature-a');
     const dataDir = makeDataDir([mainRepo, worktree]);
     addRows(dataDir, 'demo/feature-a', 3, 1);
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual([]);
     expect(result.live.map(o => o.project)).toEqual(['demo/feature-a']);
@@ -120,20 +120,20 @@ describe('scanOrphans', () => {
     expect(result.live[0].parentProject).toBe('demo');
   });
 
-  it('classifies a project whose worktree was properly removed as an orphan', () => {
+  it('classifies a project whose worktree was properly removed as an orphan', async () => {
     const { mainRepo, worktree } = makeRepoWithWorktree('demo', 'feature-b');
     const dataDir = makeDataDir([mainRepo, worktree]);
     addRows(dataDir, 'demo/feature-b', 5, 2);
     git(mainRepo, ['worktree', 'remove', worktree]);
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual(['demo/feature-b']);
     expect(result.orphans[0].observations).toBe(5);
     expect(result.orphans[0].summaries).toBe(2);
   });
 
-  it('treats an rm -rf worktree as dead even though git still lists it', () => {
+  it('treats an rm -rf worktree as dead even though git still lists it', async () => {
     // `git worktree list` keeps showing the entry, flagged `prunable`, until
     // `git worktree prune` runs — so presence in that listing does not mean
     // the worktree is live. Manual deletion bypasses the orca archive hook,
@@ -146,12 +146,12 @@ describe('scanOrphans', () => {
     // `existsSync` in `isLive` is the load-bearing check here, not the
     // `prunable` marker git attaches to the listing — see the comment on
     // `listWorktrees`.
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual(['demo/feature-c']);
   });
 
-  it('does not call a live worktree an orphan when two repos share a basename', () => {
+  it('does not call a live worktree an orphan when two repos share a basename', async () => {
     // Project name is the repo's basename, so a second clone collides. If the
     // wrong repo wins the lookup, the other's live worktrees are absent from
     // its `git worktree list` and get reported as deleted.
@@ -163,37 +163,37 @@ describe('scanOrphans', () => {
     addRows(dataDir, 'samename/wt-one', 1, 0);
     addRows(dataDir, 'samename/wt-two', 2, 0);
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual([]);
     expect(result.live.map(o => o.project).sort()).toEqual(['samename/wt-one', 'samename/wt-two']);
     expect(result.ambiguousParents).toContain('samename');
   });
 
-  it('skips a project whose parent repo cannot be resolved', () => {
+  it('skips a project whose parent repo cannot be resolved', async () => {
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'ghost-repo/some-worktree', 7, 1);
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans).toEqual([]);
     expect(result.live).toEqual([]);
     expect(result.skipped.map(s => s.project)).toEqual(['ghost-repo/some-worktree']);
   });
 
-  it('resolves the parent from an explicit repoPath when the registry is empty', () => {
+  it('resolves the parent from an explicit repoPath when the registry is empty', async () => {
     const { mainRepo, worktree } = makeRepoWithWorktree('demo', 'feature-d');
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'demo/feature-d', 3, 0);
     git(mainRepo, ['worktree', 'remove', worktree]);
 
-    const result = scanOrphans({ dataDirectory: dataDir, repoPath: mainRepo });
+    const result = await scanOrphans({ dataDirectory: dataDir, repoPath: mainRepo });
 
     expect(result.orphans.map(o => o.project)).toEqual(['demo/feature-d']);
     expect(result.skipped).toEqual([]);
   });
 
-  it('augments the registry with --repo instead of replacing it', () => {
+  it('augments the registry with --repo instead of replacing it', async () => {
     // A project resolvable only via the registry, and one resolvable only
     // via the explicit repoPath — both must be classified, neither skipped.
     const registryRepo = makeRepoWithWorktree('registry-only', 'feature-f');
@@ -202,7 +202,7 @@ describe('scanOrphans', () => {
     addRows(dataDir, 'registry-only/feature-f', 1, 0);
     addRows(dataDir, 'explicit-only/feature-g', 1, 0);
 
-    const result = scanOrphans({ dataDirectory: dataDir, repoPath: explicitRepo.mainRepo });
+    const result = await scanOrphans({ dataDirectory: dataDir, repoPath: explicitRepo.mainRepo });
 
     expect(result.skipped).toEqual([]);
     expect(result.live.map(o => o.project).sort()).toEqual([
@@ -211,7 +211,7 @@ describe('scanOrphans', () => {
     ]);
   });
 
-  it('ignores rows that are already adopted', () => {
+  it('ignores rows that are already adopted', async () => {
     const { mainRepo, worktree } = makeRepoWithWorktree('demo', 'feature-e');
     const dataDir = makeDataDir([mainRepo, worktree]);
     addRows(dataDir, 'demo/feature-e', 2, 0);
@@ -220,12 +220,12 @@ describe('scanOrphans', () => {
     db.run("UPDATE observations SET merged_into_project = 'demo'");
     db.close();
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans).toEqual([]);
   });
 
-  it('orders orphans by lastSeen, newest first', () => {
+  it('orders orphans by lastSeen, newest first', async () => {
     // scanOrphans reads readUnadoptedProjects' `ORDER BY lastSeen DESC` and
     // pushes into result.orphans without re-sorting — this pins that order,
     // since Task 4's CLI prints result.orphans directly to the user.
@@ -239,7 +239,7 @@ describe('scanOrphans', () => {
     git(first.mainRepo, ['worktree', 'remove', first.worktree]);
     git(second.mainRepo, ['worktree', 'remove', second.worktree]);
 
-    const result = scanOrphans({ dataDirectory: dataDir });
+    const result = await scanOrphans({ dataDirectory: dataDir });
 
     expect(result.orphans.map(o => o.project)).toEqual(['other/feature-i', 'demo/feature-h']);
   });
@@ -264,7 +264,7 @@ describe('decline store', () => {
     lastSeenEpoch: Date.parse(lastSeen),
   });
 
-  it('suppresses a declined project whose rows are all older than the decline', () => {
+  it('suppresses a declined project whose rows are all older than the decline', async () => {
     const dataDir = makeDataDir([]);
     recordDecline('demo/old-thing', dataDir);
     const declines = readDeclines(dataDir);
@@ -272,7 +272,7 @@ describe('decline store', () => {
     expect(isSuppressed(candidate('demo/old-thing', '2020-01-01T00:00:00.000Z'), declines)).toBe(true);
   });
 
-  it('re-surfaces a declined project once newer rows appear', () => {
+  it('re-surfaces a declined project once newer rows appear', async () => {
     // Worktree names are reused (api-reanimation, feature-dropdown are not
     // random). A decline keyed only by name would permanently hide the memory
     // of a NEW worktree that happens to reuse the name.
@@ -291,14 +291,14 @@ describe('decline store', () => {
     )).toBe(false);
   });
 
-  it('does not suppress a project that was never declined', () => {
+  it('does not suppress a project that was never declined', async () => {
     const dataDir = makeDataDir([]);
     const declines = readDeclines(dataDir);
 
     expect(isSuppressed(candidate('demo/fresh', '2026-07-20T00:00:00.000Z'), declines)).toBe(false);
   });
 
-  it('resetDeclines clears every decline', () => {
+  it('resetDeclines clears every decline', async () => {
     const dataDir = makeDataDir([]);
     recordDecline('demo/a', dataDir);
     recordDecline('demo/b', dataDir);
@@ -307,7 +307,7 @@ describe('decline store', () => {
     expect(readDeclines(dataDir).size).toBe(0);
   });
 
-  it('treats a corrupt decline file as empty (fail-open)', () => {
+  it('treats a corrupt decline file as empty (fail-open)', async () => {
     // Asking once too often is safe; silently hiding an orphan is the failure
     // this whole tool exists to prevent.
     const dataDir = makeDataDir([]);
@@ -317,7 +317,7 @@ describe('decline store', () => {
     expect(readDeclines(dataDir).size).toBe(0);
   });
 
-  it('does not suppress when the decline `at` is not a parseable timestamp (fail-open)', () => {
+  it('does not suppress when the decline `at` is not a parseable timestamp (fail-open)', async () => {
     // A garbage `at` that is still valid JSON with the right shape is kept by
     // readDeclines (it doesn't validate the timestamp). The defense lives in
     // isSuppressed instead: `Date.parse('garbage')` is NaN, and isSuppressed
@@ -372,7 +372,7 @@ describe('decline store', () => {
     expect(isSuppressed(sqliteStyleCandidate, declines)).toBe(false);
   });
 
-  it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', () => {
+  it('suppresses a candidate whose lastSeen exactly equals the decline timestamp', async () => {
     // A row created in the same millisecond as the decline was already part
     // of what the user was shown, so <= (not <) is correct: it must still be
     // suppressed. Written directly rather than via recordDecline, which
@@ -392,7 +392,7 @@ describe('decline store', () => {
 });
 
 describe('adoptOrphan', () => {
-  it('sets merged_into_project and queues both tables for the Chroma drain', () => {
+  it('sets merged_into_project and queues both tables for the Chroma drain', async () => {
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'demo/gone', 3, 2);
     const db = new Database(path.join(dataDir, 'claude-mem.db'));
@@ -417,7 +417,7 @@ describe('adoptOrphan', () => {
     expect(sums.n).toBe(2);
   });
 
-  it('refuses to adopt a project into itself', () => {
+  it('refuses to adopt a project into itself', async () => {
     // An umbrella checkout resolves parent and child to the same project name.
     // Writing merged_into_project = project changes no read result and queues
     // every row for a Chroma patch that changes no metadata.
@@ -437,7 +437,7 @@ describe('adoptOrphan', () => {
     expect(pointed.n).toBe(0);
   });
 
-  it('is idempotent — a second run changes nothing', () => {
+  it('is idempotent — a second run changes nothing', async () => {
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'demo/gone', 4, 1);
 
@@ -447,7 +447,7 @@ describe('adoptOrphan', () => {
     expect(second).toEqual({ observations: 0, summaries: 0, sessions: 0 });
   });
 
-  it('leaves other projects untouched', () => {
+  it('leaves other projects untouched', async () => {
     const dataDir = makeDataDir([]);
     addRows(dataDir, 'demo/gone', 2, 0);
     addRows(dataDir, 'demo/still-here', 3, 0);
@@ -463,7 +463,7 @@ describe('adoptOrphan', () => {
     expect(untouched.n).toBe(3);
   });
 
-  it('does not re-parent a project already adopted under a different parent', () => {
+  it('does not re-parent a project already adopted under a different parent', async () => {
     // Pins the IS NULL guard's intent: the idempotency test above only
     // covers re-running with the SAME parent. A project whose rows already
     // carry a DIFFERENT merge pointer must be left alone entirely — 0 rows
@@ -492,7 +492,7 @@ describe('adoptOrphan', () => {
     expect(sums.every(r => r.mp === 'other-parent')).toBe(true);
   });
 
-  it('names the missing table and column when a migration has not run', () => {
+  it('names the missing table and column when a migration has not run', async () => {
     // The PRAGMA check must cover all four columns adoptOrphan depends on
     // (merged_into_project and chroma_merge_synced_at on both tables), each
     // added by its own ALTER TABLE migration — not just
@@ -515,7 +515,7 @@ describe('adopt-orphans CLI --reset-declined', () => {
   // script as a subprocess pointed at an isolated temp dir — never the real
   // ~/.claude-mem/ — and prove the decisions file is byte-identical after
   // `--dry-run --reset-declined`.
-  it('leaves the decisions file untouched under --dry-run --reset-declined', () => {
+  it('leaves the decisions file untouched under --dry-run --reset-declined', async () => {
     const dataDir = makeDataDir([]);
     recordDecline('demo/old-thing', dataDir);
     const decisionsFile = path.join(dataDir, 'state', 'orphan-decisions.json');
@@ -534,7 +534,7 @@ describe('adopt-orphans CLI --reset-declined', () => {
     expect(after).toBe(before);
   });
 
-  it('leaves the database untouched under --dry-run', () => {
+  it('leaves the database untouched under --dry-run', async () => {
     // The comment above scanOrphans in adopt-orphans.ts used to claim the DB
     // is opened read-only; it is not (openConfiguredSqliteDatabase opens for
     // write and enables WAL). --dry-run must still be a true no-op against

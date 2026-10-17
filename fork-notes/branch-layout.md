@@ -38,9 +38,9 @@ conflict. Merge from the recorded base instead — the upstream commit this tree
 was last merged with:
 
 ```
-fork base: 93ca2a86  ("fix(dedup): veto a near-dup token sitting at exactly idfVetoDf records", upstream v13.35.0 + 2)
+fork base: b1527d4b  ("test(windows): spawn the running Bun instead of the PATH shim", upstream v13.41.0 + 3)
 git fetch upstream main --no-tags --filter=blob:none
-git diff 93ca2a86..upstream/main | git apply -3      # 3-way: conflicts only where both moved
+git diff b1527d4b..upstream/main | git apply -3      # 3-way: conflicts only where both moved
 ```
 
 **Update the recorded base to the new upstream tip every time upstream is
@@ -112,4 +112,7 @@ manifests (`claude-mem-cursor`, `claude-mem-grok-bot`) that
 marketplace name appears in new upstream code on every merge
 (`claude-mem@thedotmack`, `cache/thedotmack`): grep for it and rename where it
 addresses this install — `prune-cache.ts` keyed its protected version off it,
-which would have pruned the pinned fork dir.
+which would have pruned the pinned fork dir. Since v13.41 the Claude Code hooks are exec-form
+(`claude-mem …`, the `~/.local/bin` launcher that SessionStart self-heals);
+`src/launcher/claude-mem-launcher.ts` falls back to the `ormequ` cache/marketplace dirs and
+reads `enabledPlugins["claude-mem@ormequ"]` — re-check both after every merge.

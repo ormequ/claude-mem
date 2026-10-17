@@ -59,3 +59,7 @@ incidents and quotes stay in `docs-local/`.
 ## Important
 
 No need to edit the changelog ever, it's generated automatically.
+
+## Hosting
+
+No metered Cloudflare compute. New server-side work goes on Fly or Vercel. Cloudflare Workers, Durable Objects, Queues, Workflows, crons or Workers AI need an owner-approved cost comparison first. Free Cloudflare services (DNS, R2, Email Routing) are fine.

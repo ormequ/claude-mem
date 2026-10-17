@@ -92,6 +92,9 @@ collection rebuild, shutdown handling) during the v13.35 merge:
   the run (upstream's #3928 guard, now per batch). `ChromaSync.packBackfillRows
   = false` restores upstream's per-row shape; the upstream tests in
   `chroma-sync-watermarks.test.ts` run that way because they count per-row writes.
+  Since v13.41 upstream serialises live writes and backfill per row
+  (`acquireRowWriter`) and re-reads the row inside the turn; packed, each row's
+  turn is held until its batch is written and released on every exit path.
 - **Sweep retry** (`backfillAllProjects`). Upstream sweeps once per worker
   start; an incomplete sweep (not a shutdown) is retried up to
   `backfillMaxAttempts` (12) times, `backfillRetryDelayMs` (5 min, unref'd timer)

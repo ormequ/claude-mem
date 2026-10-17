@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { spawnSync } from 'child_process';
 import { loadTelemetryConfig, saveTelemetryConfig } from '../../services/telemetry/consent.js';
 import { captureCliEvent } from '../../services/telemetry/cli-telemetry.js';
-import { buildSpawnSyncInvocation, lookupWindowsCommand, spawnHidden } from '../../shared/spawn.js';
+import { spawnHidden } from '../../shared/spawn.js';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { readProjectAttribution, replaceOwnedFiles } from '../../shared/owned-file-install.js';
 import { homedir, hostname } from 'os';
@@ -45,7 +45,7 @@ import {
   PROVIDER_PROMPT_MESSAGE,
 } from '../cmem-pro-costs.js';
 import { clearProFallback, isCmemGatewayUrl } from '../../shared/cmem-gateway.js';
-import { PRO_TRIAL_LABEL } from '../../shared/pro-promo.js';
+import { PRO_TRIAL_LABEL, proTrialUrl } from '../../shared/pro-promo.js';
 import {
   buildAnthropicMaxLocalSettings,
   buildCmemActivationSettings,
@@ -53,11 +53,14 @@ import {
   buildNonInteractiveOpenRouterSettings,
   buildPersonalOpenRouterSettings,
   resolveCmemMemoryCredentials,
+  type DeliveredCmemMemoryCredentials,
 } from '../cmem-memory-credentials.js';
 import {
   filterClaudeMemSkillsDirectory,
   filterClaudeMemSkillsInPluginRoot,
 } from '../../services/integrations/SkillSelection.js';
+import { parseTeamBrainTeamRef, type TeamBrainTeamRef } from '../../shared/teambrain.js';
+import { relayedLine } from '../../shared/relayed-text.js';
 
 function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[K] {
   return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH)[key];
@@ -85,36 +88,6 @@ function detectInstallMethod(): string {
   if (name === 'npm' || name === 'bun' || name === 'pnpm' || name === 'yarn') return name;
   if (process.versions.bun) return 'bun';
   return 'unknown';
-}
-
-/**
- * Claude Code CLI version, best effort. Hook/plugin behavior differs across
- * Claude Code releases, so this is key for diagnosing installs whose worker
- * never starts. Missing binary or timeout → undefined (dropped by scrubber).
- */
-function readClaudeCodeVersionOutput(): string | undefined {
-  const command = process.platform === 'win32'
-    ? (lookupWindowsCommand('claude') ?? 'claude.cmd')
-    : 'claude';
-  const invocation = buildSpawnSyncInvocation(command, ['--version'], {
-    timeout: 5000,
-    encoding: 'utf-8',
-  });
-  const result = spawnSync(invocation.command, invocation.args, invocation.options);
-  const output = (result.stdout ?? '').trim();
-  if (!output) return undefined;
-  // "2.0.14 (Claude Code)" → "2.0.14"
-  return output.split(/\s+/)[0].slice(0, 40) || undefined;
-}
-
-function detectClaudeCodeVersion(): string | undefined {
-  try {
-    return readClaudeCodeVersionOutput();
-  } catch (error: unknown) {
-    const err = error instanceof Error ? error : new Error(String(error));
-    console.warn('[install] Could not detect Claude Code version:', err);
-    return undefined;
-  }
 }
 
 interface TaskDescriptor {
@@ -174,7 +147,7 @@ async function bufferConsole<T>(fn: () => Promise<T>): Promise<{ result: T; outp
   }
 }
 
-const log = {
+export const log = {
   info: (msg: string) => isInteractive ? p.log.info(msg) : console.log(`  ${msg}`),
   success: (msg: string) => isInteractive ? p.log.success(msg) : console.log(`  ${msg}`),
   warn: (msg: string) => isInteractive ? p.log.warn(msg) : console.warn(`  ${msg}`),
@@ -205,6 +178,8 @@ import { detectInstalledIDEs } from './ide-detection.js';
 import { initialIDESelection } from './ide-detection.js';
 import { canonicalIntegrationId } from '../../shared/integration-id.js';
 import { checkWindowsGitBash } from '../utils/windows-git-bash-preflight.js';
+import { claudeCodeVersionTooOldWarning, detectClaudeCodeVersion } from '../install/claude-code-version.js';
+import { ensureLauncherOnPath, ensureLocalBinOnShellPath } from '../../launcher/install-launcher.js';
 
 function registerMarketplace(): void {
   const knownMarketplaces = readJsonSafe<Record<string, any>>(knownMarketplacesPath(), {});
@@ -650,73 +625,12 @@ async function setupIDEs(selectedIDEs: string[], summary: InstallSummary, dshPro
   return summary.failedIDEs;
 }
 
-function detectShellConfigFile(): { path: string; shell: 'zsh' | 'bash' | 'fish' } {
-  const home = homedir();
-  const shellEnv = process.env.SHELL ?? '';
-
-  if (shellEnv.includes('fish')) {
-    return { path: join(home, '.config', 'fish', 'config.fish'), shell: 'fish' };
-  }
-  if (shellEnv.includes('zsh')) {
-    return { path: join(home, '.zshrc'), shell: 'zsh' };
-  }
-  if (process.platform === 'darwin') {
-    const bashProfile = join(home, '.bash_profile');
-    if (existsSync(bashProfile)) return { path: bashProfile, shell: 'bash' };
-  }
-  return { path: join(home, '.bashrc'), shell: 'bash' };
-}
-
 function applyClaudeCodePathSetupIfNeeded(): void {
-  const home = homedir();
-  const claudeBinDir = join(home, '.local', 'bin');
-  const claudeBinary = join(claudeBinDir, 'claude');
-
-  if (!existsSync(claudeBinary)) return;
-
-  const currentPath = process.env.PATH ?? '';
-  const pathEntries = currentPath.split(':');
-  if (pathEntries.includes(claudeBinDir)) return;
-
-  const { path: configFile, shell } = detectShellConfigFile();
-  const binPathLiteral = '$HOME/.local/bin';
-  const exportLine = shell === 'fish'
-    ? `set -gx PATH ${claudeBinDir} $PATH`
-    : `export PATH="${binPathLiteral}:$PATH"`;
-
-  let existing = '';
-  if (existsSync(configFile)) {
-    try {
-      existing = readFileSync(configFile, 'utf-8');
-    } catch (error: unknown) {
-      // [ANTI-PATTERN IGNORED]: the failure is already surfaced to the user via the interactive-aware log.warn wrapper below (p.log.warn in a TTY, console.warn otherwise); a raw console call here would double-print.
-      log.warn(`Could not read ${configFile}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  } else {
-    try {
-      mkdirSync(dirname(configFile), { recursive: true });
-    } catch {
-      // Best-effort directory creation.
-    }
-  }
-
-  if (existing.includes(claudeBinDir) || existing.includes(binPathLiteral)) {
-    log.info(`Claude Code PATH already configured in ${configFile}`);
-  } else {
-    try {
-      const trailing = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-      const block = `${trailing}\n# Added by claude-mem installer for Claude Code\n${exportLine}\n`;
-      writeFileSync(configFile, existing + block, 'utf-8');
-      log.success(`Added Claude Code to PATH in ${configFile}`);
-    } catch (error: unknown) {
-      // [ANTI-PATTERN IGNORED]: the failure is already surfaced to the user via the interactive-aware log.warn wrapper below (p.log.warn in a TTY, console.warn otherwise), together with the manual remediation command.
-      log.warn(`Could not update ${configFile}: ${error instanceof Error ? error.message : String(error)}`);
-      log.info(`Run manually: echo '${exportLine}' >> ${configFile}`);
-      return;
-    }
-  }
-
-  process.env.PATH = `${claudeBinDir}:${currentPath}`;
+  // Claude Code's native installer drops `claude` in ~/.local/bin; only then
+  // does this caller need ~/.local/bin on PATH. The appender itself is shared
+  // with the claude-mem launcher setup (src/launcher/install-launcher.ts).
+  if (!existsSync(join(homedir(), '.local', 'bin', 'claude'))) return;
+  ensureLocalBinOnShellPath({ purposeLabel: 'Claude Code', logger: log });
 }
 
 export function claudeCodeInstallCommand(windows = IS_WINDOWS): string {
@@ -1242,7 +1156,7 @@ async function bootstrapAndPersistServerApiKey(): Promise<void> {
  * non-fatal — the caller has already printed the URL, so the worst case is the
  * user clicks it themselves.
  */
-function openBrowser(url: string): void {
+export function openBrowser(url: string): void {
   try {
     if (process.platform === 'darwin') {
       spawnSync('open', [url], { stdio: 'ignore' });
@@ -1370,7 +1284,15 @@ export async function promptProvider(
       p.cancel('CMEM Pro setup was not completed. Run npx claude-mem install to try again.');
       process.exit(1);
     }
-    const cmemCredentials = resolveCmemMemoryCredentials(enrollment, persistedSettings);
+    // A sync-only account (a TeamBrain seat) gets cloud sync and no CMEM Pro
+    // observer. Its sync connection is already saved; the observer and the
+    // provider settings stay exactly as they are, and no staged or earlier
+    // gateway key is promoted in their place.
+    if (!enrollment.memory) {
+      log.warn(`This account syncs through a TeamBrain seat, which does not include CMEM Pro's observer. Memory keeps its current provider (${initialProvider}). CMEM Pro: ${proTrialUrl('installer')}`);
+      return initialProvider;
+    }
+    const cmemCredentials = resolveCmemMemoryCredentials(enrollment.memory, persistedSettings);
     if (!cmemCredentials) {
       p.cancel('CMEM Pro did not return memory credentials. Run npx claude-mem install to try again.');
       process.exit(1);
@@ -1645,7 +1567,13 @@ const OAUTH_POLL_BUDGET_MAX_MS = 30 * 60 * 1000;
 const OAUTH_DEFAULT_POLL_INTERVAL_S = 3;
 
 type InstallerPollStage = 'awaiting_login' | 'awaiting_checkout' | 'awaiting_approval';
-type TrialPlan = 'trial' | 'pro' | 'none';
+/** `teambrain_seat`: a TeamBrain seat, which grants cloud sync and no CMEM Pro observer. */
+type TrialPlan = 'trial' | 'pro' | 'none' | 'teambrain_seat';
+/**
+ * What a poll loop waits for. `login` returns once the browser signs in;
+ * `enrollment` (CMEM Pro) and `teambrain_join` only once credentials are ready.
+ */
+export type InstallerPairingPhase = 'login' | 'enrollment' | 'teambrain_join';
 
 export interface InstallerOAuthPairing {
   pairingId: string;
@@ -1799,23 +1727,29 @@ export function setInstallerSignupContext(ctx: { installState?: InstallState; us
   signupContext = { ...ctx };
 }
 
-/** Pure: the JSON body for POST /api/installer/oauth/start. */
+/**
+ * Pure: the JSON body for POST /api/installer/oauth/start. `teamInvite` is
+ * the TeamBrain invite token a `teambrain_join` pairing carries; it travels
+ * only in this POST body, never in a URL.
+ */
 export function buildInstallerOAuthStartBody(
   source: string,
   deviceName: string,
   ctx: { installState?: InstallState; usageSummary?: UsageSummary | null } = {},
+  teamInvite?: string,
 ): Record<string, unknown> {
   return {
     source,
     device_name: deviceName,
     ...(ctx.installState ? { install_state: ctx.installState } : {}),
     ...(ctx.usageSummary ? { usage_summary: ctx.usageSummary } : {}),
+    ...(teamInvite ? { team_invite: teamInvite } : {}),
   };
 }
 
 /** Starts an OAuth pairing. No email address or identity is accepted from the CLI. */
 export async function startInstallerOAuthPairing(
-  opts: { source?: string; timeoutMs?: number } = {},
+  opts: { source?: string; timeoutMs?: number; teamInvite?: string } = {},
 ): Promise<InstallerOAuthPairing | null> {
   const source = opts.source ?? 'npx-installer';
   const controller = new AbortController();
@@ -1825,7 +1759,7 @@ export async function startInstallerOAuthPairing(
     const response = await fetch(CMEM_INSTALLER_OAUTH_START_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildInstallerOAuthStartBody(source, hostname(), signupContext)),
+      body: JSON.stringify(buildInstallerOAuthStartBody(source, hostname(), signupContext, opts.teamInvite)),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -1862,15 +1796,26 @@ export interface TrialReadyResult {
   userId: string;
   setupToken: string;
   hubUrl: string;
-  memoryKey: string;
-  memoryBaseUrl: string;
-  memoryModel: string;
+  /**
+   * The CMEM Pro observer credentials, or null when the server sent none: a
+   * sync-only account (a TeamBrain seat), which keeps its own observer.
+   */
+  memory: DeliveredCmemMemoryCredentials | null;
   plan: TrialPlan;
   trialEndsAt: string | null;
+  /** The TeamBrain team a `teambrain_join` pairing joined, when the server names it. */
+  team: TeamBrainTeamRef | null;
+  /** Where that team's TeamBrain API lives, when the server says. */
+  teambrainUrl: string | null;
 }
 
-export function buildTrialReadySettings(
-  result: TrialReadyResult,
+/**
+ * The cloud sync connection every ready poll delivers, seat or Pro: the keys
+ * the worker's CloudSync reads, and nothing for the observer. A new pairing
+ * starts a new device (CloudSync mints the id on its next start).
+ */
+export function buildSyncConnectionSettings(
+  result: Pick<TrialReadyResult, 'userId' | 'setupToken' | 'hubUrl'>,
   deviceName: string = hostname(),
 ): Record<string, string> {
   return {
@@ -1879,12 +1824,26 @@ export function buildTrialReadySettings(
     CLAUDE_MEM_CLOUD_SYNC_HUB_URL: result.hubUrl,
     CLAUDE_MEM_CLOUD_SYNC_DEVICE_ID: '',
     CLAUDE_MEM_CLOUD_SYNC_DEVICE_NAME: deviceName,
+  };
+}
+
+export function buildTrialReadySettings(
+  result: TrialReadyResult,
+  deviceName: string = hostname(),
+): Record<string, string> {
+  const syncConnection = buildSyncConnectionSettings(result, deviceName);
+  // Without memory credentials there is no CMEM Pro observer to stage, so only
+  // the sync connection is written. The provider, a key staged by an earlier
+  // pairing and the fallback marker all stay as they are.
+  if (!result.memory) return syncConnection;
+  return {
+    ...syncConnection,
     CLAUDE_MEM_PRO_TRIAL_STATE: 'active',
     CLAUDE_MEM_PRO_TRIAL_ENDS_AT: result.trialEndsAt ?? '',
     CLAUDE_MEM_PRO_PLAN: result.plan,
-    CLAUDE_MEM_PRO_MEMORY_KEY: result.memoryKey,
-    CLAUDE_MEM_PRO_MEMORY_BASE_URL: result.memoryBaseUrl,
-    CLAUDE_MEM_PRO_MEMORY_MODEL: result.memoryModel,
+    CLAUDE_MEM_PRO_MEMORY_KEY: result.memory.memoryKey,
+    CLAUDE_MEM_PRO_MEMORY_BASE_URL: result.memory.memoryBaseUrl,
+    CLAUDE_MEM_PRO_MEMORY_MODEL: result.memory.memoryModel,
     CLAUDE_MEM_PRO_FALLBACK_AT: '',
   };
 }
@@ -1901,30 +1860,61 @@ export function parseTrialReadyBody(body: unknown): TrialReadyResult | null {
     memory_model?: unknown;
     plan?: unknown;
     trial?: { ends_at?: unknown };
+    team?: unknown;
+    teambrain_url?: unknown;
   };
   const userId = nonEmptyTrimmedString(b.user_id);
   const setupToken = nonEmptyTrimmedString(b.setup_token);
   const hubUrl = nonEmptyTrimmedString(b.hub_url);
   if (b.status !== 'ready' || !userId || !setupToken || !hubUrl) return null;
 
+  // Observer credentials come from the server or not at all. A body without a
+  // memory key is a sync-only account: nothing may stand in for the key, since
+  // the setup token is no gateway key and the gateway refuses an account that
+  // is not Pro. Filling it in pointed a seat member's observer at a gateway
+  // that turns them away.
+  const memoryKey = nonEmptyTrimmedString(b.memory_key);
   return {
     userId,
     setupToken,
     hubUrl,
-    memoryKey: nonEmptyTrimmedString(b.memory_key) ?? setupToken,
-    memoryBaseUrl: nonEmptyTrimmedString(b.memory_base_url) ?? CMEM_PRO_BASE_URL,
-    memoryModel: nonEmptyTrimmedString(b.memory_model) ?? CMEM_PRO_MODEL,
-    plan: b.plan === 'trial' || b.plan === 'pro' || b.plan === 'none' ? b.plan : 'trial',
+    memory: memoryKey
+      ? {
+          memoryKey,
+          memoryBaseUrl: nonEmptyTrimmedString(b.memory_base_url) ?? CMEM_PRO_BASE_URL,
+          memoryModel: nonEmptyTrimmedString(b.memory_model) ?? CMEM_PRO_MODEL,
+        }
+      : null,
+    plan: b.plan === 'trial' || b.plan === 'pro' || b.plan === 'none' || b.plan === 'teambrain_seat' ? b.plan : 'trial',
     trialEndsAt: nonEmptyTrimmedString(b.trial?.ends_at),
+    team: parseTeamBrainTeamRef(b.team),
+    teambrainUrl: nonEmptyTrimmedString(b.teambrain_url),
   };
 }
 
-type InstallerPollOutcome =
+export type InstallerPollOutcome =
   | { kind: 'authenticated'; userId: string }
   | { kind: 'pending'; stage: InstallerPollStage }
   | ({ kind: 'ready' } & TrialReadyResult)
+  /** The server refused a TeamBrain join (team full, invite no longer valid, ...): final. */
+  | { kind: 'join_failed'; reason: string; message: string | null }
   | { kind: 'gone' }
   | { kind: 'unreachable' };
+
+/** What to say for a refused join when the server sent no words of its own. */
+const JOIN_FAILED_FALLBACKS: Record<string, string> = {
+  team_full: 'the team has no free seat. Ask its owner to add one.',
+  invite_invalid: 'the invite is no longer valid. Ask the team owner for a new invite link.',
+  team_inactive: 'the team is not active.',
+  not_a_member: 'this account is not a member of the team.',
+};
+
+/** One line for a refused join: the server's own words when it sent them, and its reason code. */
+export function joinFailedMessage(outcome: { reason: string; message: string | null }): string {
+  const said = relayedLine(outcome.message) || JOIN_FAILED_FALLBACKS[outcome.reason] || 'cmem.ai refused the join.';
+  const reason = relayedLine(outcome.reason);
+  return `Could not join the team: ${said}${reason && reason !== 'unknown' ? ` (${reason})` : ''}`;
+}
 
 async function pollInstallerPairingOnce(pairing: InstallerOAuthPairing): Promise<InstallerPollOutcome> {
   const controller = new AbortController();
@@ -1936,13 +1926,25 @@ async function pollInstallerPairingOnce(pairing: InstallerOAuthPairing): Promise
       body: JSON.stringify({ pairing_id: pairing.pairingId, secret: pairing.secret }),
       signal: controller.signal,
     });
-    if (response.status === 404 || response.status === 410) return { kind: 'gone' };
 
     const body = await response.json().catch(() => ({})) as {
       status?: unknown;
       stage?: unknown;
       user_id?: unknown;
+      reason?: unknown;
+      error?: unknown;
     };
+    // A refused TeamBrain join also answers 410, so it is told apart from an
+    // expired pairing by its body: at sign-in or at device approval, the
+    // server says why (team_full, invite_invalid, team_inactive, not_a_member).
+    if (body.status === 'join_failed') {
+      return {
+        kind: 'join_failed',
+        reason: nonEmptyTrimmedString(body.reason) ?? 'unknown',
+        message: nonEmptyTrimmedString(body.error),
+      };
+    }
+    if (response.status === 404 || response.status === 410) return { kind: 'gone' };
     if (response.status === 202) {
       const stage: InstallerPollStage =
         body.stage === 'awaiting_checkout' || body.stage === 'awaiting_approval'
@@ -1978,25 +1980,34 @@ function sleepUnlessCancelled(ms: number, isCancelled: () => boolean): Promise<v
   });
 }
 
-async function waitForInstallerPairing(
+export async function waitForInstallerPairing(
   pairing: InstallerOAuthPairing,
-  phase: 'login' | 'enrollment',
+  phase: InstallerPairingPhase,
   version: string,
 ): Promise<InstallerPollOutcome | null> {
   const startedAt = Date.now();
+  const rerun = phase === 'teambrain_join' ? 'Run npx claude-mem teambrain join again' : 'Run the installer again';
   // The login phase must never name CMEM Pro. Logging in is required of every
   // user and happens BEFORE the provider choice, so naming a paid plan here
   // reads as an upsell attached to a mandatory step and muddies the funnel.
   // The poll loop prints whatever stage the server reports, so a server-side
   // 'awaiting_checkout' during login would otherwise leak the Pro wording.
+  // A TeamBrain join is neither: the server is adding this account to a team.
   const stageMessages: Record<InstallerPollStage, string> = {
-    awaiting_login: 'Waiting for OAuth login in the browser…',
+    awaiting_login: phase === 'teambrain_join'
+      ? 'Waiting for you to sign in in the browser…'
+      : 'Waiting for OAuth login in the browser…',
     awaiting_checkout: phase === 'login'
       ? 'Waiting for the browser to finish signing you in…'
-      : 'Waiting for CMEM Pro setup in the browser…',
-    awaiting_approval: `Enter code ${pairing.userCode} in the browser to approve this device…`,
+      : phase === 'teambrain_join'
+        ? 'Waiting for the browser to finish joining the team…'
+        : 'Waiting for CMEM Pro setup in the browser…',
+    // A join's invite is redeemed at device approval, on a page that names the team.
+    awaiting_approval: phase === 'teambrain_join'
+      ? `Approve this device on the page (code ${pairing.userCode}) to join the team…`
+      : `Enter code ${pairing.userCode} in the browser to approve this device…`,
   };
-  let stage: InstallerPollStage = phase === 'login' ? 'awaiting_login' : 'awaiting_checkout';
+  let stage: InstallerPollStage = phase === 'enrollment' ? 'awaiting_checkout' : 'awaiting_login';
   log.info(stageMessages[stage]);
 
   let cancelled = false;
@@ -2031,14 +2042,18 @@ async function waitForInstallerPairing(
 
       if (result.kind === 'authenticated' && phase === 'login') return result;
       if (result.kind === 'ready') return result;
+      if (result.kind === 'join_failed') {
+        log.error(joinFailedMessage(result));
+        return null;
+      }
       if (result.kind === 'gone') {
-        log.error('This browser authorization expired. Run the installer again.');
+        log.error(`This browser authorization expired. ${rerun}.`);
         return null;
       }
       if (result.kind === 'unreachable') {
         consecutiveFailures += 1;
         if (consecutiveFailures >= 3) {
-          log.error('cmem.ai is not responding. Run the installer again when it is reachable.');
+          log.error(`cmem.ai is not responding. ${rerun} when it is reachable.`);
           return null;
         }
       } else {
@@ -2051,12 +2066,16 @@ async function waitForInstallerPairing(
       await sleepUnlessCancelled(pairing.pollIntervalMs, () => cancelled);
     }
 
-    await captureCliEvent('installer_oauth_timeout', {
-      version,
-      phase,
-      duration_ms: Date.now() - startedAt,
-    });
-    log.error('Browser authorization timed out. Run the installer again.');
+    // The telemetry `phase` enum is the installer's (login / enrollment /
+    // deferred); a TeamBrain join is not reported.
+    if (phase !== 'teambrain_join') {
+      await captureCliEvent('installer_oauth_timeout', {
+        version,
+        phase,
+        duration_ms: Date.now() - startedAt,
+      });
+    }
+    log.error(`Browser authorization timed out. ${rerun}.`);
     return null;
   } finally {
     process.off('SIGINT', onSigint);
@@ -2096,7 +2115,7 @@ export async function completeInstallerOAuthLogin(
  * Raw mode mirrors waitForInstallerPairing: only toggled when this call turned
  * it on, and always restored.
  */
-async function waitForReturnToOpenBrowser(message: string): Promise<void> {
+export async function waitForReturnToOpenBrowser(message: string): Promise<void> {
   if (!isInteractive || process.stdin.isTTY !== true) return;
   log.info(message);
   await new Promise<void>((resolve) => {
@@ -2188,11 +2207,14 @@ export async function offerDeferredLogin(options: InstallOptions, version: strin
   log.info('AGENT: show this link to the user so they can finish signing in. Do not open it yourself; the install is already complete.');
 }
 
-function noteDeviceCode(pairing: InstallerOAuthPairing): void {
+export function noteDeviceCode(
+  pairing: InstallerOAuthPairing,
+  instruction: string = 'Enter this code in the browser to approve this device.',
+): void {
   const message = [
     styleText(['bold', 'cyan'], pairing.userCode),
     '',
-    'Enter this code in the browser to approve this device.',
+    instruction,
   ].join('\n');
   if (isInteractive) p.note(message, 'Your device code');
   else log.info(`Device code: ${pairing.userCode}`);
@@ -2229,9 +2251,13 @@ export async function completeCmemTrialPairing(
     return null;
   }
   pairing.delivered = result;
-  clearProFallback();
-  log.success(`CMEM Pro ${PRO_TRIAL_LABEL} active.`);
-  await captureCliEvent('trial_activated', { version });
+  // A sync-only account (a TeamBrain seat) has no CMEM Pro to announce, and
+  // no gateway key whose fallback a fresh delivery would clear.
+  if (result.memory) {
+    clearProFallback();
+    log.success(`CMEM Pro ${PRO_TRIAL_LABEL} active.`);
+    await captureCliEvent('trial_activated', { version });
+  }
   return result;
 }
 
@@ -2608,6 +2634,53 @@ export function validateNonInteractiveProvider(
   }
 }
 
+/**
+ * Compiles the version-stable hook launcher from the freshly cached plugin and
+ * puts `claude-mem` on PATH (plan-17 #3605, Phase 3). Skips the compile when the
+ * placed binary already prints the current LAUNCHER_PROTOCOL, but still checks
+ * PATH. A failure warns
+ * and continues: `doctor` reports the gap and the plugin's SessionStart
+ * self-heal (scripts/ensure-launcher.cjs) retries on the next session.
+ * Runs inside a spinner task, so lines are returned or queued on the summary,
+ * never printed live. Returns the one-line status for the task result.
+ */
+function placeHookLauncherOnPath(pluginRoot: string, summary: InstallSummary): string {
+  const warnHookLauncher = (cause: Error, remediation?: string) => installerError(ErrorSeverity.WARN_CONTINUE, {
+    component: 'hook-launcher',
+    phase: 'setup-runtime',
+    cause,
+    remediation: remediation ?? 'Re-run `npx claude-mem install`; `npx claude-mem doctor` shows the hook launcher row.',
+  }, summary);
+  const launcherStatusLines: string[] = [];
+  try {
+    const ensureResult = ensureLauncherOnPath({
+      pluginRoot,
+      // ensureBun ran just before this step and aborts the install without Bun.
+      resolveBunPath: getBunPath,
+      invocationContext: 'npx-installer',
+      logger: {
+        info: (line) => launcherStatusLines.push(line),
+        success: (line) => launcherStatusLines.push(line),
+        warn: (line) => warnHookLauncher(new Error(line)),
+      },
+    });
+    if (ensureResult.status === 'already-current') {
+      launcherStatusLines.unshift(`claude-mem launcher already current at ${ensureResult.binaryPath}`);
+    } else if (ensureResult.status === 'newer-protocol-kept') {
+      launcherStatusLines.unshift(`claude-mem launcher at ${ensureResult.binaryPath} is newer than this installer; kept`);
+    } else if (ensureResult.status === 'foreign-binary-kept') {
+      return `claude-mem launcher not placed (${ensureResult.binaryPath} is another program; see warnings below)`;
+    } else if (ensureResult.status === 'bun-not-found') {
+      warnHookLauncher(new Error('Bun not found, the claude-mem launcher was not compiled'));
+      return 'claude-mem launcher not placed (Bun not found)';
+    }
+    return launcherStatusLines.join('\n  ');
+  } catch (error: unknown) {
+    warnHookLauncher(error instanceof Error ? error : new Error(String(error)));
+    return 'claude-mem launcher not placed (see warnings below)';
+  }
+}
+
 export async function runInstallCommand(options: InstallOptions = {}): Promise<void> {
   const summary = createInstallSummary();
   try {
@@ -2696,17 +2769,23 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
   const usageLines = formatUsageSummaryLines(usageSummary);
   if (usageLines.length > 0) log.info(usageLines.join('\n'));
 
-  // All claude-mem hooks run via `"shell": "bash"`; on Windows, Claude Code
-  // resolves that through Git for Windows with no WSL fallback. Surfacing it
-  // here — rather than letting the first hook throw an unbranded error — is
-  // a warning, not a hard stop: the operator may install Git for Windows
-  // after this run and hooks will start working without a reinstall.
+  // Runtime hooks run the on-PATH claude-mem launcher in exec form, with no
+  // shell. Only the Setup hook (version-check.js) still declares
+  // `"shell": "bash"`, and Claude Code fires it only for `claude --init` /
+  // `--maintenance`; on Windows it resolves bash through Git for Windows with
+  // no WSL fallback. A warning, not a hard stop: memory capture works without
+  // Git Bash, and Git for Windows can be installed later without a reinstall.
   if (IS_WINDOWS) {
     const gitBash = checkWindowsGitBash();
     if (!gitBash.ok) {
       log.warn(gitBash.detail);
     }
   }
+
+  // An older Claude Code ignores the hooks' `args` and runs bare `claude-mem`,
+  // which captures nothing and tells no one, so say it here.
+  const claudeCodeTooOldWarning = claudeCodeVersionTooOldWarning(detectClaudeCodeVersion());
+  if (claudeCodeTooOldWarning) log.warn(claudeCodeTooOldWarning);
 
   if (alreadyInstalled) {
     if (process.stdin.isTTY) {
@@ -2811,7 +2890,9 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
             stopTreeSitterHeartbeat();
           }
           writeInstallMarker(join(marketplaceDirectory(), 'plugin'), version, bunVersion, uvVersion);
-          return `Runtime ready (Bun ${bunVersion}, uv ${uvVersion}) ${styleText('green', 'OK')}`;
+          message('Placing the claude-mem hook launcher on PATH…');
+          const launcherStatus = placeHookLauncherOnPath(cacheDir, summary);
+          return `Runtime ready (Bun ${bunVersion}, uv ${uvVersion}) ${styleText('green', 'OK')}\n  ${launcherStatus}`;
         },
       },
     ];
@@ -3217,7 +3298,9 @@ async function runRepairCommandInner(summary: InstallSummary): Promise<void> {
         message('Provisioning the tree-sitter CLI…');
         await provisionTreeSitterCli(cacheDir, ErrorSeverity.ABORT, summary);
         writeInstallMarker(cacheDir, version, bunVersion, uvVersion);
-        return `Runtime ready (Bun ${bunVersion}, uv ${uvVersion}) ${styleText('green', 'OK')}`;
+        message('Placing the claude-mem hook launcher on PATH…');
+        const launcherStatus = placeHookLauncherOnPath(cacheDir, summary);
+        return `Runtime ready (Bun ${bunVersion}, uv ${uvVersion}) ${styleText('green', 'OK')}\n  ${launcherStatus}`;
       },
     },
     {

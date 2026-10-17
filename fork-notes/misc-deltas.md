@@ -34,6 +34,12 @@ Small, self-contained changes that do not need a section of their own.
   same state instead of using the SDK. Known ceiling: the in-RAM buffer grows
   until the provider is configured or the worker restarts. Not covered:
   `getAiStatus` (worker-service.ts) still reports `claude` in that state.
+- Quota fallback is opt-in (v13.41 merge). Upstream made
+  `CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER` default to `claude` and reads `''` as
+  `claude` too, so a spent provider quota would move observer work onto the
+  Claude subscription. The fork defaults it to `off` and reads `''` as off
+  (`readQuotaFallbackProvider`, the stale-OAuth hint in `context.ts`, the viewer
+  defaults and settings modal).
   The upstream suite assumes upstream's `claude` default; `tests/preload.ts`
   pins `CLAUDE_MEM_PROVIDER=claude` in env when unset (a seeded settings file is
   not enough: many tests rewrite the shared data dir's settings.json). Tests of

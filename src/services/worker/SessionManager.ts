@@ -470,7 +470,7 @@ export class SessionManager {
    * so ingest can record the hook-spool hand-off before any await (and before
    * the generator kick) — see HookSpool.drain.
    */
-  queueObservation(sessionDbId: number, data: ObservationData): void {
+  queueObservation(sessionDbId: number, data: ObservationData, enqueuedAtEpochMs?: number): void {
     let session = this.sessions.get(sessionDbId);
     if (!session) {
       session = this.initializeSession(sessionDbId);
@@ -494,7 +494,7 @@ export class SessionManager {
       toolUseId: data.toolUseId,
     };
 
-    const messageId = this.buffer.enqueue(sessionDbId, message);
+    const messageId = this.buffer.enqueue(sessionDbId, message, enqueuedAtEpochMs);
     const queueDepth = this.buffer.getPendingCount(sessionDbId);
     const toolSummary = redactForLog(logger.formatTool(data.tool_name, data.tool_input));
     if (messageId === 0) {
@@ -509,7 +509,12 @@ export class SessionManager {
   }
 
   /** Synchronous on purpose — see queueObservation. */
-  queueSummarize(sessionDbId: number, lastAssistantMessage?: string, promptNumber?: number): void {
+  queueSummarize(
+    sessionDbId: number,
+    lastAssistantMessage?: string,
+    promptNumber?: number,
+    enqueuedAtEpochMs?: number,
+  ): void {
     let session = this.sessions.get(sessionDbId);
     if (!session) {
       session = this.initializeSession(sessionDbId);
@@ -521,7 +526,7 @@ export class SessionManager {
       last_assistant_message: lastAssistantMessage
     };
 
-    const messageId = this.buffer.enqueue(sessionDbId, message);
+    const messageId = this.buffer.enqueue(sessionDbId, message, enqueuedAtEpochMs);
     const queueDepth = this.buffer.getPendingCount(sessionDbId);
     if (messageId === 0) {
       logger.debug('QUEUE', `DUP_SUPPRESSED | sessionDbId=${sessionDbId} | type=summarize | depth=${queueDepth}`, {
@@ -648,7 +653,7 @@ export class SessionManager {
       }
       this.clearTransportResume(sessionDbId);
       this.logParkedMessagesEndingWithSession(sessionDbId);
-      this.buffer.dispose(sessionDbId);
+      this.disposeSessionBuffer(sessionDbId);
       this.summarizeRescues.delete(sessionDbId);
       this.sessions.delete(sessionDbId);
       logger.info('SESSION', 'Session deleted', {
@@ -704,7 +709,7 @@ export class SessionManager {
 
     this.clearTransportResume(sessionDbId);
     this.logParkedMessagesEndingWithSession(sessionDbId);
-    this.buffer.dispose(sessionDbId);
+    this.disposeSessionBuffer(sessionDbId);
     this.summarizeRescues.delete(sessionDbId);
     this.sessions.delete(sessionDbId);
     logger.info('SESSION', 'Session removed from active sessions', {
@@ -724,8 +729,25 @@ export class SessionManager {
     });
   }
 
+  private disposeSessionBuffer(sessionDbId: number): void {
+    const pendingCount = this.buffer.getPendingCount(sessionDbId);
+    if (pendingCount > 0) {
+      logger.warn('SESSION', 'Discarding pending session messages', {
+        sessionId: sessionDbId,
+        pendingCount,
+      });
+    }
+    this.buffer.dispose(sessionDbId);
+  }
+
   async shutdownAll(): Promise<void> {
     const sessionIds = Array.from(this.sessions.keys());
+    const pendingCountAtShutdownStart = sessionIds.reduce((total, id) => total + this.buffer.getPendingCount(id), 0);
+    if (pendingCountAtShutdownStart > 0) {
+      logger.warn('SESSION', 'Worker shutdown starting with pending session messages', {
+        pendingCountAtShutdownStart,
+      });
+    }
     await Promise.all(sessionIds.map(id => this.deleteSession(id)));
   }
 
