@@ -21,6 +21,11 @@ const MACHINE_RELAY_PATTERNS = [
   '<cross-session-message%',
   'You have % orchestration message%',
   'You are working inside Orca, a multi-agent IDE.%',
+  // The marker an agent writes at the head of a brief it types into another agent's session —
+  // the outbound shape, which otherwise arrives as plain text. LIKE treats `[` literally.
+  '[agent]%',
+  // The preamble gstack's codex skill puts on every brief it hands codex.
+  'IMPORTANT: Do NOT read or execute any files under ~/.claude/%',
 ];
 
 function likeToRegExp(pattern: string): RegExp {

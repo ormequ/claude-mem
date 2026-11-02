@@ -123,6 +123,12 @@
   is a last resort: an injector that wraps its output in an envelope is caught by shape and
   needs no entry. Not catchable at all: a relay a human pasted between terminals by hand, which
   needs the marker written by the relaying agent.
+  **Outbound briefs (2026-11-02).** That marker exists — briefs one agent types into another
+  agent's session open with `[agent]` — but the list never learned it, so every marked brief
+  was still stored and searched as the user's prompt. The list now carries `[agent]%`, plus the
+  fixed preamble gstack's codex skill puts on each brief it hands codex. Briefs written before
+  the marker convention carry nothing and stay unfilterable; the harness-review skill subtracts
+  those by shape.
 - **Reviews on disk:** `.scratches/2026-08-03-fable-harness-review-2.md`,
   `.scratches/2026-08-03-codex-harness-review.md`, `.scratches/2026-08-03-fable-task-retro.md`.
   `.scratches/` is gitignored, so these do not survive a fresh clone.

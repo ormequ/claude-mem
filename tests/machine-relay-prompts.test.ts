@@ -12,7 +12,12 @@ const ORCA_WORKER = 'You are working inside Orca, a multi-agent IDE. You are a d
 // The same injection appended to what the user actually wrote — the user's words are the row.
 const MIXED = 'я дропнул старого воркера.\nYou have 2 orchestration messages.';
 
-const ALL = [RELAY, CROSS, HUMAN, ORCA_CHECK, ORCA_WORKER, MIXED];
+// Outbound briefs: typed into another agent's session, so they carry a marker, not an envelope.
+const AGENT_BRIEF = '[agent] Machine-written messages land in the `user_prompts` table.';
+const CODEX_BRIEF = 'IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/.\n\nReview the plan.';
+const HUMAN_AGENT = 'почему [agent] сообщения попадают в промпты?';
+
+const ALL = [RELAY, CROSS, HUMAN, ORCA_CHECK, ORCA_WORKER, MIXED, AGENT_BRIEF, CODEX_BRIEF, HUMAN_AGENT];
 
 test('isMachineRelayPrompt matches envelopes, not human text mentioning them', () => {
   expect(isMachineRelayPrompt(RELAY)).toBe(true);
@@ -24,6 +29,12 @@ test('isMachineRelayPrompt matches envelope-less injections, but not a prompt th
   expect(isMachineRelayPrompt(ORCA_CHECK)).toBe(true);
   expect(isMachineRelayPrompt(ORCA_WORKER)).toBe(true);
   expect(isMachineRelayPrompt(MIXED)).toBe(false);
+});
+
+test('isMachineRelayPrompt matches outbound agent briefs by their head marker only', () => {
+  expect(isMachineRelayPrompt(AGENT_BRIEF)).toBe(true);
+  expect(isMachineRelayPrompt(CODEX_BRIEF)).toBe(true);
+  expect(isMachineRelayPrompt(HUMAN_AGENT)).toBe(false);
 });
 
 test('notMachineRelaySql filters the same rows the TS predicate does', () => {
