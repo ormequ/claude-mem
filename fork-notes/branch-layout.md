@@ -38,9 +38,10 @@ conflict. Merge from the recorded base instead — the upstream commit this tree
 was last merged with:
 
 ```
-fork base: b1527d4b  ("test(windows): spawn the running Bun instead of the PATH shim", upstream v13.41.0 + 3)
+fork base: d8bf121a  ("fix(adoption): preserve actual checkout paths before remapping memories", upstream v15.9.0 + 1)
 git fetch upstream main --no-tags --filter=blob:none
-git diff b1527d4b..upstream/main | git apply -3      # 3-way: conflicts only where both moved
+git merge-tree --write-tree --name-only --merge-base=d8bf121a HEAD upstream/main   # dry run, touches nothing
+git merge-recursive d8bf121a -- HEAD upstream/main   # real 3-way with rename detection; commit it as a single-parent commit
 ```
 
 **Update the recorded base to the new upstream tip every time upstream is

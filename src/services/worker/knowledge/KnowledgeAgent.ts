@@ -7,10 +7,12 @@ import { logger } from '../../../utils/logger.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import { buildIsolatedEnvWithFreshOAuth } from '../../../shared/EnvManager.js';
-import { findClaudeExecutable } from '../../../shared/find-claude-executable.js';
+import { findClaudeExecutable, isClaudeExecutableUnspawnable } from '../../../shared/find-claude-executable.js';
 import { sanitizeEnv } from '../../../supervisor/env-sanitizer.js';
 import { resolveTierAlias, resolveOpenRouterQaModel } from '../model-aliases.js';
 import { resolveOpenRouterChatCompletionsUrl } from '../../../shared/openrouter-base-url.js';
+import { AppError } from '../../server/ErrorHandler.js';
+import { isAuthFailureObserverOutput, isOrgDisabledSubscriptionObserverOutput } from '../../../sdk/output-classifier.js';
 
 import { buildHardenedSdkOptions } from '../../../sdk/hardened-options.js';
 
@@ -63,6 +65,12 @@ function errorFromUnsuccessfulResult(
     : (Array.isArray(resultMessage.errors)
       ? resultMessage.errors.map((entry) => String(entry).trim()).filter(Boolean).join('; ')
       : '');
+  if (isAuthFailureObserverOutput(details)) {
+    // A signed-out CLI or a refused key is the user's setup state, not a worker
+    // fault: a 4xx keeps it out of the error sink and tells the caller what to fix.
+    const remedy = isOrgDisabledSubscriptionObserverOutput(details) ? '' : ' Run /login in Claude Code, then retry.';
+    return new AppError(`Knowledge ${action} failed: Claude Code is not authenticated (${details}).${remedy}`, 401, 'CLAUDE_NOT_AUTHENTICATED');
+  }
   return new Error(`Knowledge ${action} failed (${resultMessage.subtype})${details ? `: ${details}` : ''}`);
 }
 
@@ -71,6 +79,22 @@ interface ChatCompletionsEndpoint {
   apiUrl: string;
   model: string;
   headers: Record<string, string>;
+}
+
+/**
+ * `findClaudeExecutable`, with its setup failures (no CLI, every CLI too old,
+ * a bad CLAUDE_CODE_PATH, the desktop app) as a 424 `AppError`. The user must
+ * fix their machine, so the route logs a warning and does not send the error
+ * to error tracking. An unspawnable CLI stays a server fault: only a worker
+ * restart fixes it.
+ */
+function findClaudeExecutableForKnowledge(): string {
+  try {
+    return findClaudeExecutable('WORKER');
+  } catch (error) {
+    if (isClaudeExecutableUnspawnable(error) || !(error instanceof Error)) throw error;
+    throw new AppError(error.message, 424, 'CLAUDE_CLI_SETUP_REQUIRED');
+  }
 }
 
 /** Per-call options. `abortController` is passed to the Agent SDK's `Options.abortController` (sdk.d.ts). */
@@ -123,7 +147,7 @@ export class KnowledgeAgent {
       'Acknowledge what you\'ve received. Summarize the key themes and topics you can answer questions about.'
     ].join('\n');
 
-    const claudePath = findClaudeExecutable('WORKER');
+    const claudePath = findClaudeExecutableForKnowledge();
     const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
 
     const { query } = await loadClaudeAgentSdk();
@@ -181,7 +205,7 @@ export class KnowledgeAgent {
 
   async query(corpus: CorpusFile, question: string, callOptions: KnowledgeAgentCallOptions = {}): Promise<QueryResult> {
     if (!corpus.session_id) {
-      throw new Error(`Corpus "${corpus.name}" has no session — call prime first`);
+      throw new AppError(`Corpus "${corpus.name}" has no session — call prime first`, 409, 'CORPUS_NOT_PRIMED');
     }
 
     const endpoint = await this.chatCompletionsEndpoint(corpus);
@@ -201,7 +225,9 @@ export class KnowledgeAgent {
       // The caller walked away; the route logs that once. Not a query failure.
       if (callOptions.abortController?.signal.aborted) throw error;
       if (!isSessionResumeError(error)) {
-        if (error instanceof Error) {
+        if (error instanceof AppError && error.statusCode < 500) {
+          logger.warn('WORKER', `Query rejected for corpus "${corpus.name}"`, {}, error);
+        } else if (error instanceof Error) {
           logger.error('WORKER', `Query failed for corpus "${corpus.name}"`, {}, error);
         } else {
           logger.error('WORKER', `Query failed for corpus "${corpus.name}" (non-Error thrown)`, { thrownValue: String(error) });
@@ -229,7 +255,7 @@ export class KnowledgeAgent {
   }
 
   private async executeQuery(corpus: CorpusFile, question: string, callOptions: KnowledgeAgentCallOptions): Promise<QueryResult> {
-    const claudePath = findClaudeExecutable('WORKER');
+    const claudePath = findClaudeExecutableForKnowledge();
     const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
 
     const { query } = await loadClaudeAgentSdk();

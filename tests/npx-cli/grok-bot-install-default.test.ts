@@ -36,32 +36,4 @@ describe('grok-bot install default provider', () => {
     expect(readme).toContain('npx claude-mem install --ide grok-bot');
     expect(readme).not.toContain('npx claude-mem install --ide grok-bot --provider host');
   });
-
-  it('keeps installer provider-cutover and does not recycle a healthy worker from settings POST', () => {
-    const source = readFileSync(join(repoRoot, 'src/npx-cli/commands/install.ts'), 'utf-8');
-    expect(source).toContain("'provider-cutover'");
-    expect(source).toContain('POST /api/settings still must not recycle a healthy worker');
-  });
-
-  it('keeps grok-bot out of the non-interactive default branch', () => {
-    expect(resolveInstallerProviderChoice({ ide: 'grok-bot' })).toBeUndefined();
-    const install = readFileSync(join(repoRoot, 'src/npx-cli/commands/install.ts'), 'utf-8');
-    const fnStart = install.indexOf('function validateNonInteractiveProvider(');
-    const fnEnd = install.indexOf('\n}\n', fnStart);
-    const fn = install.slice(fnStart, fnEnd);
-    expect(fn).toContain('if (!options.provider) {');
-    expect(fn).toContain("options.providerSource = 'default'");
-    expect(fn).not.toContain('grok-bot');
-  });
-
-  it('keeps the implicit-provider hook at the CLI boundary for non-TTY installs', () => {
-    const cli = readFileSync(join(repoRoot, 'src/npx-cli/index.ts'), 'utf-8');
-    const install = readFileSync(join(repoRoot, 'src/npx-cli/commands/install.ts'), 'utf-8');
-    const grokInstaller = readFileSync(join(repoRoot, 'src/services/integrations/GrokBotInstaller.ts'), 'utf-8');
-    expect(cli).toContain("from './installer-provider-choice.js'");
-    expect(cli).toContain('resolveInstallerProviderChoice');
-    expect(cli).toContain('process.stdin.isTTY');
-    expect(install).not.toContain("initialValues: ['cmem']");
-    expect(grokInstaller).toContain('GROK_BOT_AGENT_DATA');
-  });
 });

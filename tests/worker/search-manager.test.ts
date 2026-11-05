@@ -96,10 +96,10 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
         { doc_type: 'observation' },
         { $or: [{ project: 'search-project' }, { merged_into_project: 'search-project' }] },
       ],
-    });
+    }, expect.any(Object), expect.any(Function));
     const obsHydrationArg = getObservationsByIds.mock.calls[0][1];
     expect(obsHydrationArg).toEqual(expect.objectContaining({ project: 'search-project' }));
-    expect(obsHydrationArg).not.toHaveProperty('platformSource');
+    expect(obsHydrationArg.platformSource).toBeUndefined();
     expect(result.observations).toEqual([observation]);
   });
 
@@ -196,7 +196,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
       limit: 5,
     });
 
-    expect(queryChroma).toHaveBeenCalledWith('trading', 100, undefined);
+    expect(queryChroma).toHaveBeenCalledWith('trading', 100, undefined, expect.any(Object), expect.any(Function));
     expect(getObservationsByIds).toHaveBeenCalledWith([11], expect.objectContaining({ orderBy: 'date_asc' }));
     expect(getSessionSummariesByIds).toHaveBeenCalledWith([22], expect.objectContaining({ orderBy: 'date_asc' }));
     expect(getUserPromptsByIds).toHaveBeenCalledWith([33], expect.objectContaining({ orderBy: 'date_asc' }));
@@ -436,10 +436,9 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
         { doc_type: 'session_summary' },
         { $or: [{ project: 'search-project' }, { merged_into_project: 'search-project' }] },
       ],
-    });
+    }, expect.any(Object), expect.any(Function));
     expect(getSessionSummariesByIds).toHaveBeenCalledWith([session.id], {
-      orderBy: 'date_desc',
-      limit: 10,
+      orderBy: 'relevance',
       project: 'search-project',
       projects: ['search-project'],
       platformSource: undefined,
@@ -497,8 +496,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
     });
 
     expect(getUserPromptsByIds).toHaveBeenCalledWith([prompt.id], {
-      orderBy: 'date_desc',
-      limit: 10,
+      orderBy: 'relevance',
       project: 'search-project',
       projects: ['search-project'],
       platformSource: undefined,
@@ -551,13 +549,13 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
 
     await manager.getTimelineByQuery({
       query: 'timeline',
-      mode: 'auto',
       project: 'search-project',
       platform_source: 'cursor',
     });
 
     expect(searchObservations).toHaveBeenCalledWith('timeline', {
       project: 'search-project',
+      projects: ['search-project'],
       platformSource: undefined,
       limit: 1,
     });
@@ -568,6 +566,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
       10,
       'search-project',
       undefined,
+      ['search-project'],
     );
   });
 
@@ -732,7 +731,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
         { doc_type: 'observation' },
         { $or: [{ project: spellings }, { merged_into_project: spellings }] },
       ],
-    });
+    }, expect.any(Object), expect.any(Function));
   });
 
   // Gate P2-5: a checkout's search covers every key it reads (its current key
@@ -773,7 +772,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
         { doc_type: 'observation' },
         { $or: [{ project: keys }, { merged_into_project: keys }] },
       ],
-    });
+    }, expect.any(Object), expect.any(Function));
     expect(getObservationsByIds).toHaveBeenCalledWith([observation.id], expect.objectContaining({
       projects: ['acme/api', 'api', 'old-folder'],
     }));
@@ -812,7 +811,7 @@ describe('SearchManager cross-harness hydration (platform_source ignored on read
         { doc_type: 'observation' },
         { $or: [{ project: keys }, { merged_into_project: keys }] },
       ],
-    });
+    }, undefined, expect.any(Function));
     expect(getObservationsByIds).toHaveBeenCalledWith([observation.id], expect.objectContaining({
       projects: ['api', 'acme/api', 'old-folder'],
     }));
@@ -1190,32 +1189,23 @@ describe('SearchManager recency window wiring (#4770)', () => {
     return { manager, queryChroma, getObservationsByIds };
   }
 
-  const obsScope = {
-    obs_type: undefined,
-    concepts: undefined,
-    files: undefined,
-    searchObservations: true,
-    searchSessions: false,
-    searchPrompts: false,
-  };
-
   const keptIds = (rows: Array<{ id: number }>) => rows.map(row => row.id);
 
-  it('keeps the shipped 90-day window when the constructor gets no window (performChromaSemanticSearch)', async () => {
+  it('keeps the shipped 90-day window when the constructor gets no window (unified search)', async () => {
     const { manager } = makeManager();
-    const results = await (manager as any).performChromaSemanticSearch('memory', undefined, { limit: 10 }, obsScope);
+    const results = await manager.search({ query: 'memory', type: 'observations', limit: 10, format: 'json' });
     expect(keptIds(results.observations)).toEqual([101]);
   });
 
-  it('keeps every match when the window is disabled with 0 (performChromaSemanticSearch)', async () => {
+  it('keeps every match when the window is disabled with 0 (unified search)', async () => {
     const { manager } = makeManager(0);
-    const results = await (manager as any).performChromaSemanticSearch('memory', undefined, { limit: 10 }, obsScope);
+    const results = await manager.search({ query: 'memory', type: 'observations', limit: 10, format: 'json' });
     expect(keptIds(results.observations)).toEqual([101, 102]);
   });
 
-  it('honors a custom window of 30 days (performChromaSemanticSearch)', async () => {
+  it('honors a custom window of 30 days (unified search)', async () => {
     const { manager } = makeManager(30 * DAY_MS);
-    const results = await (manager as any).performChromaSemanticSearch('memory', undefined, { limit: 10 }, obsScope);
+    const results = await manager.search({ query: 'memory', type: 'observations', limit: 10, format: 'json' });
     expect(keptIds(results.observations)).toEqual([101]);
   });
 
