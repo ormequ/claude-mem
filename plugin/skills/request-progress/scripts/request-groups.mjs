@@ -50,6 +50,8 @@ var init_hook_constants = __esm({
       // Worker health check (3s — healthy worker responds in <100ms)
       API_REQUEST: 3e4,
       // Hook API calls should outlive health probes but stay below hook caps
+      CORPUS_QUERY: 3e5,
+      // query_corpus runs a synchronous LLM pass over the corpus — allow 5 min
       SESSION_INIT_HOOK_CAP: SESSION_INIT_HOOK_CAP_MS,
       SESSION_INIT_REQUEST: 1e4,
       // POSIX default for the whole session-init round-trip (plan-17 step 3): the cap minus the hook's own overhead; never Windows-scaled up
@@ -311,7 +313,7 @@ var init_paths = __esm({
     DATA_DIR = resolveDataDir();
     DEFAULT_CLAUDE_CONFIG_DIR = join4(homedir3(), ".claude");
     CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || DEFAULT_CLAUDE_CONFIG_DIR;
-    MARKETPLACE_ROOT = join4(CLAUDE_CONFIG_DIR, "plugins", "marketplaces", "thedotmack");
+    MARKETPLACE_ROOT = join4(CLAUDE_CONFIG_DIR, "plugins", "marketplaces", "ormequ");
     LOGS_DIR = join4(DATA_DIR, "logs");
     USER_SETTINGS_PATH = join4(DATA_DIR, "settings.json");
     DB_FILENAME = "claude-mem.db";
@@ -353,6 +355,12 @@ var init_paths = __esm({
 // src/utils/logger.ts
 import { closeSync as closeSync2, existsSync as existsSync4, fstatSync, mkdirSync as mkdirSync3, openSync as openSync2, statSync as statSync2, writeSync as writeSync2 } from "fs";
 import { dirname as dirname3, join as join5 } from "path";
+function escapeLineBreaks(value) {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+}
+function escapeStackText(stack) {
+  return "  " + stack.replace(/\r/g, "\\r").replace(/\n(?![ \t]+at )/g, "\\n");
+}
 var LogLevel, errorSink, Logger, logger;
 var init_logger = __esm({
   "src/utils/logger.ts"() {
@@ -598,20 +606,22 @@ ${data.stack}` : data.message;
         const componentStr = component.padEnd(6);
         let correlationStr = "";
         if (context?.correlationId) {
-          correlationStr = `[${context.correlationId}] `;
+          correlationStr = `[${escapeLineBreaks(String(context.correlationId))}] `;
         } else if (context?.sessionId) {
-          correlationStr = `[session-${context.sessionId}] `;
+          correlationStr = `[session-${escapeLineBreaks(String(context.sessionId))}] `;
         }
         let dataStr = "";
         if (data !== void 0 && data !== null) {
           if (data instanceof Error) {
-            dataStr = this.getLevel() === 0 /* DEBUG */ ? `
-${data.message}
-${data.stack}` : ` ${data.message}`;
+            dataStr = ` ${escapeLineBreaks(data.message)}`;
+            if (this.getLevel() === 0 /* DEBUG */ && data.stack) {
+              dataStr += `
+${escapeStackText(data.stack)}`;
+            }
           } else if (this.getLevel() === 0 /* DEBUG */ && typeof data === "object") {
             dataStr = "\n" + this.safeStringify(data, 2);
           } else {
-            dataStr = " " + this.formatData(data);
+            dataStr = " " + escapeLineBreaks(this.formatData(data));
           }
         }
         let contextStr = "";
@@ -619,13 +629,15 @@ ${data.stack}` : ` ${data.message}`;
           const { sessionId, memorySessionId, correlationId, ...rest } = context;
           if (Object.keys(rest).length > 0) {
             const pairs = Object.entries(rest).map(([k, v]) => {
-              if (typeof v !== "object" || v === null || v instanceof Error || v instanceof Date) return `${k}=${v}`;
-              return `${k}=${Array.isArray(v) ? this.safeStringify(v) : this.formatData(v)}`;
+              if (typeof v !== "object" || v === null || v instanceof Error || v instanceof Date) {
+                return `${escapeLineBreaks(k)}=${escapeLineBreaks(String(v))}`;
+              }
+              return `${escapeLineBreaks(k)}=${escapeLineBreaks(Array.isArray(v) ? this.safeStringify(v) : this.formatData(v))}`;
             });
             contextStr = ` {${pairs.join(", ")}}`;
           }
         }
-        const logLine = `[${timestamp}] [${levelStr}] [${componentStr}] ${correlationStr}${message}${contextStr}${dataStr}`;
+        const logLine = `[${timestamp}] [${levelStr}] [${componentStr}] ${correlationStr}${escapeLineBreaks(message)}${contextStr}${dataStr}`;
         if (this.logFilePath) {
           try {
             this.appendLine(this.logFilePath, logLine + "\n");
@@ -865,7 +877,8 @@ var init_SettingsDefaultsManager = __esm({
         // starts it again. Never armed with CLAUDE_MEM_WORKER_AUTOSTART=false or
         // while transcript watches run.
         CLAUDE_MEM_IDLE_EXIT_SEC: "0",
-        CLAUDE_MEM_SKIP_TOOLS: "ListMcpResourcesTool,SlashCommand,Skill,TodoWrite,AskUserQuestion",
+        CLAUDE_MEM_SKIP_TOOLS: "ListMcpResourcesTool,SlashCommand,Skill,TodoWrite",
+        // fork: AskUserQuestion removed 2026-08-03, see fork-notes
         CLAUDE_MEM_SKIP_BASH_PATTERNS: "",
         // Regex matched against a shell command (Bash; PowerShell; Codex exec_command); when it matches, the observation is skipped. Empty = capture every command. Use alternation for several patterns, e.g. ^(ls|cat|pwd)\b
         CLAUDE_MEM_SKIP_SUBAGENT_OBSERVATIONS: "false",
@@ -876,11 +889,14 @@ var init_SettingsDefaultsManager = __esm({
         // #3165 — opt-in: the Stop hook scans the transcript's tail for advisor calls and stores the advice locally (worker runtime only)
         CLAUDE_MEM_DELIVERABLES_ENABLED: "true",
         // 'false' = the Stop hook neither copies deliverables into the bucket nor records them; files already in the bucket stay
-        // Deliberate divergence from the installer prompt: the interactive
-        // provider prompt defaults to 'cmem' (the hosted observer), but headless
-        // installs land here — no delivered key exists headlessly, so the settings
-        // default stays 'claude'.
-        CLAUDE_MEM_PROVIDER: "claude",
+        // fork: upstream defaults to 'claude', which bills the Claude Code
+        // subscription for compression that runs on every tool call whenever
+        // settings.json names no provider. The fork's default is the
+        // openai-compatible provider, the path that carries the fork's rate-limit
+        // protection. Unconfigured, it idles rather than falling through to
+        // 'claude' (SessionRoutes, selectedProviderUnconfigured). See fork-notes.
+        CLAUDE_MEM_PROVIDER: "openai-compatible",
+        CLAUDE_MEM_PROVIDER_BY_SOURCE: "",
         CLAUDE_MEM_MEDIA_CAPTURE_ENABLED: "false",
         CLAUDE_MEM_MEDIA_INFERENCE_ENABLED: "false",
         CLAUDE_MEM_CODEX_MODEL: "",
@@ -913,6 +929,8 @@ var init_SettingsDefaultsManager = __esm({
         // Changing it strands installs that were seeded with the old id: add that
         // id to RETIRED_OPENROUTER_DEFAULT_MODELS.
         CLAUDE_MEM_OPENROUTER_MODEL: "cohere/north-mini-code:free",
+        CLAUDE_MEM_OPENROUTER_QA_MODEL: "",
+        // Knowledge-agent Q&A model; empty = reuse CLAUDE_MEM_OPENROUTER_MODEL. Set a stronger model (or $TIER:smart) for corpus answers.
         CLAUDE_MEM_OPENROUTER_BASE_URL: "",
         // #2382/#2590/#2622/#2393 — optional OpenAI-compatible base URL (e.g. https://api.deepseek.com, http://localhost:1234/v1). Empty = default OpenRouter endpoint.
         CLAUDE_MEM_OPENROUTER_TEMPERATURE: "",
@@ -920,6 +938,14 @@ var init_SettingsDefaultsManager = __esm({
         // Optional: for OpenRouter analytics
         CLAUDE_MEM_OPENROUTER_APP_NAME: "claude-mem",
         // App name for OpenRouter analytics
+        CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED: "true",
+        // ON by default: gateways in front of this path enforce a rolling request ceiling
+        CLAUDE_MEM_OPENROUTER_MIN_REQUEST_INTERVAL_MS: "1500",
+        // ~40 calls/min across every session — about what one generator sustains alone
+        CLAUDE_MEM_OPENROUTER_RATE_LIMIT_BACKOFF_MS: "75000",
+        // Measured recovery of a tripped ceiling is ~74s; shorter waits just re-trip it
+        CLAUDE_MEM_OPENROUTER_MAX_RETRIES: "4",
+        // 4 x ~75s of patience before the session pauses on rate_limit
         // JSON object of provider-specific request fields, e.g. {"reasoning":{"enabled":false}}.
         // Settings file or env only (never the HTTP settings API); never sent to the cmem gateway.
         CLAUDE_MEM_OPENROUTER_EXTRA_BODY: "",
@@ -935,12 +961,19 @@ var init_SettingsDefaultsManager = __esm({
         // OpenAI-compatible base URL, e.g. https://integrate.api.nvidia.com/v1. Overrides the preset's base URL when set.
         CLAUDE_MEM_OPENAI_COMPAT_MODEL: "",
         // Model id passed verbatim. Empty = the preset's default model.
+        CLAUDE_MEM_OPENAI_COMPAT_QA_MODEL: "",
+        // Knowledge-agent Q&A model; empty = reuse CLAUDE_MEM_OPENAI_COMPAT_MODEL.
+        CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED: "true",
+        // Same pacing + 75s rate-limit window as the OpenRouter keys above
+        CLAUDE_MEM_OPENAI_COMPAT_MIN_REQUEST_INTERVAL_MS: "1500",
+        CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMIT_BACKOFF_MS: "75000",
+        CLAUDE_MEM_OPENAI_COMPAT_MAX_RETRIES: "4",
         CLAUDE_MEM_OPENAI_COMPAT_REASONING: "",
         // off | on. Empty = off: every openai-compatible request sends reasoning:{enabled:false}. "on" leaves reasoning to the endpoint.
         CLAUDE_MEM_OPENAI_COMPAT_OBSERVATION_BATCH_SIZE: "1",
         // Queued same-context events per observer prompt (1-32); opt-in.
-        CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: "claude",
-        // 'claude' (the Anthropic plan; '' means this too) | 'gemini' | 'openrouter' | 'openai-compatible' | 'off': where observer work goes while the selected provider cannot serve (spent allowance, rate limit or over capacity past its retries, outage, repeated unusable replies). Claude is used only when a Claude login or key exists
+        CLAUDE_MEM_QUOTA_FALLBACK_PROVIDER: "off",
+        // fork: off by default ('' reads as off too). 'off' | 'claude' | 'gemini' | 'openrouter' | 'openai-compatible': where observer work goes while the selected provider's quota breaker holds (a spent allowance, or rate limits that outlast their retries)
         CLAUDE_MEM_QUOTA_FALLBACK_MODEL: "",
         // Claude model for a Claude fallback run; '' = CLAUDE_MEM_MODEL and tier routing. Ignored for other fallbacks (only ClaudeProvider reads modelOverride)
         CLAUDE_MEM_QUOTA_FALLBACK_AUTH_METHOD: "",
@@ -982,8 +1015,8 @@ var init_SettingsDefaultsManager = __esm({
         CLAUDE_MEM_WELCOME_HINT_ENABLED: "true",
         CLAUDE_MEM_WORK_STATE_ENABLED: "true",
         // 'false' = no work-state section at SessionStart and no work_state_* MCP tools, for hosts that track work their own way
-        CLAUDE_MEM_FILE_READ_GATE_ENABLED: "true",
-        // 'false' = never block a full-file Read; the file's observation timeline is still added as context
+        CLAUDE_MEM_FILE_READ_GATE_ENABLED: "false",
+        // fork: off by default. 'false' = never block a full-file Read; the file's observation timeline is still added as context
         CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED: "false",
         CLAUDE_MEM_FOLDER_USE_LOCAL_MD: "false",
         // When true, writes to CLAUDE.local.md instead of CLAUDE.md
@@ -1022,6 +1055,8 @@ var init_SettingsDefaultsManager = __esm({
         // Comma-separated glob patterns for excluded project paths
         CLAUDE_MEM_PROJECT_ENVIRONMENTS: "[]",
         // JSON array of {"name","patterns","inherit"?}: directories matching an environment's globs share one project named after it; an explicit inherit list replaces the derived read keys ([] reads only the environment)
+        CLAUDE_MEM_PROJECT_PROVIDERS: "{}",
+        // fork: JSON object {"<project>": "<provider>"} pinning a project (and its worktrees) to one provider, bypassing CLAUDE_MEM_PROVIDER and every fallback
         CLAUDE_MEM_FOLDER_MD_EXCLUDE: "[]",
         // JSON array of folder paths to exclude from CLAUDE.md generation
         CLAUDE_MEM_FOLDER_MD_SKELETON_DENYLIST: "[]",
@@ -1148,8 +1183,8 @@ var init_SettingsDefaultsManager = __esm({
         // Backend-supplied endpoint paired with CLAUDE_MEM_PRO_MEMORY_KEY
         CLAUDE_MEM_PRO_MEMORY_MODEL: "",
         // Backend-supplied model paired with CLAUDE_MEM_PRO_MEMORY_KEY
-        CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH: "true",
-        // 'false' = My Work never runs owner-goals / request-progress on its own (refresh.json in ~/.claude-mem/work-view)
+        CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH: "false",
+        // fork: off by default, a refresh runs the user's logged-in agent on their own subscription. 'false' = My Work never runs owner-goals / request-progress on its own (refresh.json in ~/.claude-mem/work-view)
         CLAUDE_MEM_WORK_VIEW_COPY_PROVIDER: "",
         // '' uses OpenRouter only when it is the primary provider; openrouter/openai-compatible explicitly select that provider; off disables generated My Work copy
         CLAUDE_MEM_WORK_VIEW_COPY_MODEL: "",
@@ -1855,10 +1890,15 @@ function buildWorktreeProjectKey(parentProjectName, worktreeName) {
 function submoduleLeaf(info, repoRoot) {
   if (!info.isSubmodule || !info.parentRepoPath) return null;
   const relative = path2.relative(info.parentRepoPath, repoRoot);
-  if (!relative || relative.startsWith("..") || path2.isAbsolute(relative)) return null;
+  if (!relative || relative === ".." || relative.startsWith(`..${path2.sep}`) || path2.isAbsolute(relative)) return null;
   return relative.split(path2.sep).join("/");
 }
 function getProjectContext(cwd, platform = process.platform) {
+  const configuredRoot = process.env.CLAUDE_MEM_PROJECT_ROOT?.trim();
+  if (configuredRoot) {
+    warnProjectRootDeprecated();
+    cwd = configuredRoot;
+  }
   if (!cwd || cwd.trim() === "") {
     const fallback = getProjectName(cwd, platform);
     return { primary: fallback, parent: null, isWorktree: false, isSubmodule: false, allProjects: [fallback], keySource: "path" };
@@ -1870,6 +1910,13 @@ function getProjectContext(cwd, platform = process.platform) {
   const derivedContext = slug ? withPrimaryKey(pathContext, slug, "git-remote") : pathContext;
   const environment = matchProjectEnvironment(expandedCwd, loadProjectEnvironments());
   return environment ? withPrimaryKey(derivedContext, environment.name, "environment", environment.inherit) : derivedContext;
+}
+function warnProjectRootDeprecated() {
+  if (projectRootDeprecationWarned) return;
+  projectRootDeprecationWarned = true;
+  logger.warn("PROJECT_NAME", 'CLAUDE_MEM_PROJECT_ROOT is deprecated; declare the directory in CLAUDE_MEM_PROJECT_ENVIRONMENTS instead (e.g. [{"name":"acme","patterns":["~/work/acme/**"]}])', {
+    root: process.env.CLAUDE_MEM_PROJECT_ROOT
+  });
 }
 function withPrimaryKey(context, primary, keySource, readKeys = context.allProjects) {
   return {
@@ -1891,8 +1938,12 @@ function getPathProjectContext(cwd, expandedCwd, repoRoot) {
     let primary;
     let legacyKeys;
     if (worktreeInfo.isSubmodule) {
-      primary = `${parent}/${submoduleLeaf(worktreeInfo, checkoutRoot) ?? cwdProjectName}`;
+      const leaf = submoduleLeaf(worktreeInfo, checkoutRoot);
+      primary = `${parent}/${leaf ?? cwdProjectName}`;
       legacyKeys = cwdProjectName !== parent ? [cwdProjectName] : [];
+      if (leaf?.startsWith("..") && leaf !== cwdProjectName) {
+        legacyKeys.push(`${parent}/${cwdProjectName}`);
+      }
     } else {
       primary = buildWorktreeProjectKey(parent, cwdProjectName);
       legacyKeys = primary === parent ? [`${parent}/${cwdProjectName}`] : [];
@@ -1914,7 +1965,7 @@ function getPathProjectContext(cwd, expandedCwd, repoRoot) {
   }
   return { primary: cwdProjectName, parent: null, isWorktree: false, isSubmodule: false, allProjects: [cwdProjectName], keySource: "path" };
 }
-var UNKNOWN_PROJECT_NAME, PROJECT_ROOT_MARKERS, MAX_MARKER_WALK_DEPTH, PROJECT_NAME_SOURCE_SETTING, identitySettingsCache, PROJECT_ENVIRONMENTS_SETTING, environmentsCache, remoteSlugByRepoRoot;
+var UNKNOWN_PROJECT_NAME, PROJECT_ROOT_MARKERS, MAX_MARKER_WALK_DEPTH, PROJECT_NAME_SOURCE_SETTING, identitySettingsCache, PROJECT_ENVIRONMENTS_SETTING, environmentsCache, remoteSlugByRepoRoot, projectRootDeprecationWarned;
 var init_project_name = __esm({
   "src/utils/project-name.ts"() {
     "use strict";
@@ -1932,6 +1983,7 @@ var init_project_name = __esm({
     PROJECT_ENVIRONMENTS_SETTING = "CLAUDE_MEM_PROJECT_ENVIRONMENTS";
     environmentsCache = null;
     remoteSlugByRepoRoot = /* @__PURE__ */ new Map();
+    projectRootDeprecationWarned = false;
   }
 });
 
