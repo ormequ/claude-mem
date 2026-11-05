@@ -20,6 +20,8 @@ import { join } from 'path';
 // defaults to openai-compatible and idles while it is unconfigured. Fork tests
 // that exercise the fork default pin CLAUDE_MEM_PROVIDER themselves.
 process.env.CLAUDE_MEM_PROVIDER ??= 'claude';
+// FORK: same reason for My Work's automatic refresh, which the fork defaults off.
+process.env.CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH ??= 'true';
 
 for (const key of ['CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED', 'CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED']) {
   process.env[key] ??= 'false';

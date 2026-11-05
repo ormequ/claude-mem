@@ -135,17 +135,17 @@ describe('Smart search project scope across index, timeline, and selected detail
     },
   );
 
-  it('expands the inferred project aliases while preserving partial-adoption and platform filters', async () => {
+  it('expands the inferred project aliases while preserving partial-adoption filters', async () => {
     const result = await manager.timeline({
       anchor: parentAnchor, platformSource: 'claude', depth_before: 20, depth_after: 20,
     });
     expect(result.isError).not.toBe(true);
     const body = text(result);
-    expect(ids(body)).toEqual([parentAnchor, anchor, partialAdopted]);
+    // FORK: reads are cross-harness, so another platform's row stays visible.
+    expect(ids(body)).toEqual([parentAnchor, anchor, partialAdopted, otherPlatform]);
     expect(body).toContain('Allowed merged prompt');
     expect(body).not.toContain('Unadopted private prompt');
     expect(body).not.toContain('Unrelated private prompt');
-    expect(ids(body)).not.toContain(otherPlatform);
   });
 
   it('preserves an explicit multi-project timeline', async () => {
@@ -184,14 +184,14 @@ describe('Smart search project scope across index, timeline, and selected detail
     expect(text(result)).not.toContain('Unrelated private summary');
   });
 
-  it('keeps platform filters and rejects unrelated or unadopted anchors', async () => {
+  it('ignores platform filters and rejects unrelated or unadopted anchors', async () => {
     const scope = { project, projects: `${project},${parent}`, platformSource: 'claude', depth_before: 10, depth_after: 10 };
     const result = await manager.timeline({ ...scope, anchor });
     expect(result.isError).not.toBe(true);
     expect(ids(text(result))).toContain(anchor);
-    expect(ids(text(result))).not.toContain(otherPlatform);
+    expect(ids(text(result))).toContain(otherPlatform);
     expect(ids(text(result))).not.toContain(partialUnmerged);
-    for (const id of [foreign, partialUnmerged, otherPlatform]) {
+    for (const id of [foreign, partialUnmerged]) {
       expect((await manager.timeline({ ...scope, anchor: id })).isError).toBe(true);
     }
   });

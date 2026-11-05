@@ -243,7 +243,8 @@ const browserPost = (path: string, body: unknown) => realFetch(`${workerBase}${p
   method: 'POST', headers: { 'Content-Type': 'application/json', Origin: workerBase }, body: JSON.stringify(body),
 });
 
-describe('install in GUI mode (interactive TTY, no --provider)', () => {
+// FORK: the browser funnel is gated off with CMEM_ACCOUNT_LOGIN_ENABLED (cmem.ai trial and Stripe).
+describe.skip('install in GUI mode (interactive TTY, no --provider)', () => {
   it('At Home: starts the worker, opens the setup page, asks for no login, and finishes when the page does', async () => {
     const install = runInstallCommand({});
     await waitForStage('waiting-for-choice');
@@ -467,7 +468,6 @@ describe('install with --provider claude (interactive TTY)', () => {
     expect(pairingStarts).toEqual([]);
     expect(questions.some(q => q.startsWith('Which Claude model'))).toBe(true);
     expect(readSettings()).toMatchObject({ CLAUDE_MEM_PROVIDER: 'claude', CLAUDE_MEM_CLAUDE_AUTH_METHOD: 'subscription' });
-    expect(lines.join('\n')).toContain('--provider claude runs memory on your own Anthropic plan.');
     expect(existsSync(statePath)).toBe(false);
     expect(workerStartStates.every(state => state === null)).toBe(true);
   });

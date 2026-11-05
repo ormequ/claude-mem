@@ -181,6 +181,9 @@ describe('reasoning budget exhaustion', () => {
     settingsOverrides = {};
     spies.push(spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => ({
       ...SettingsDefaultsManager.getAllDefaults(),
+      // FORK: this mock bypasses the env overrides tests/preload.ts sets.
+      CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED: 'false',
+      CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED: 'false',
       ...settingsOverrides,
     }) as ReturnType<typeof SettingsDefaultsManager.loadFromFile>));
   });

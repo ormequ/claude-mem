@@ -24,7 +24,7 @@ let reads: ReturnType<typeof spyOn>;
 let errors: ReturnType<typeof spyOn>;
 
 beforeEach(async () => {
-  const settings = { ...SettingsDefaultsManager.getAllDefaults(), CLAUDE_MEM_CHROMA_ENABLED: 'false' };
+  const settings = { ...SettingsDefaultsManager.getAllDefaults(), CLAUDE_MEM_CHROMA_ENABLED: 'false', CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH: 'true' };
   spyOn(SettingsDefaultsManager, 'loadFromFile').mockReturnValue(settings);
   spyOn(logger, 'info').mockImplementation(() => {});
   spyOn(logger, 'warn').mockImplementation(() => {});

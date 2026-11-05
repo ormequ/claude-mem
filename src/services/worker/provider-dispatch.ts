@@ -320,7 +320,8 @@ function selectWithQuotaFallback(primary: SelectableProvider): ProviderSelection
     if (admission.admitted) gatewayProbeClaimId = admission.claimId;
     else routed = { provider: primary, fallbackFrom: null };
   }
-  if (readQuotaFallbackProvider() !== null) {
+  // FORK: the provider fallback defaults off, but a credential stand-in is its own opt-in and still logs.
+  if (readQuotaFallbackProvider() !== null || (primary === 'claude' && claudeQuotaStandIn() !== null)) {
     noteQuotaFallbackTransition(primary, routed, nowMs);
   }
   return routed.fallbackFrom === null

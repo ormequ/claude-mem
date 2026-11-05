@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'bun:test';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   getAdvertisedMcpToolsForRuntime,
   SERVER_BETA_ONLY_TOOL_NAMES,

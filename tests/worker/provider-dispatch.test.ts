@@ -116,14 +116,14 @@ describe('provider-dispatch', () => {
 
     it('routes the pinned project and its worktrees to the pinned provider', () => {
       for (const project of ['personal', 'personal/feature-x']) {
-        expect(selectProviderForGenerator(project).provider).toBe('claude');
-        expect(getSelectedProvider(project)).toBe('claude');
+        expect(selectProviderForGenerator(undefined, project).provider).toBe('claude');
+        expect(getSelectedProvider(undefined, project)).toBe('claude');
       }
     });
 
     it('leaves other projects, look-alike names and unknown sessions on the global provider', () => {
       for (const project of ['main', 'personal-site', undefined]) {
-        expect(selectProviderForGenerator(project).provider).toBe('openai-compatible');
+        expect(selectProviderForGenerator(undefined, project).provider).toBe('openai-compatible');
       }
     });
 

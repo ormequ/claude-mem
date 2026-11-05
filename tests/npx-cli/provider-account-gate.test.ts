@@ -74,7 +74,8 @@ describe('install help text (#4131)', () => {
     for (const provider of ['codex', 'gemini', 'openrouter'] as const) {
       expect(providerNeedsAccount(provider)).toBe(true);
     }
-    expect(providerLine).toContain('codex, gemini and openrouter need a cmem.ai sign-in');
-    expect(providerLine).toContain('claude and host need no claude-mem account');
+    // FORK: no cmem.ai account is ever required, so the help line does not ask for one.
+    expect(providerLine).toContain('a fresh install defaults to openai-compatible');
+    expect(providerLine).not.toContain('cmem.ai');
   });
 });

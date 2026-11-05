@@ -32,6 +32,8 @@ function harness(count: unknown = '4', contextWindowTokens?: number) {
     CLAUDE_MEM_OPENAI_COMPAT_PRESET: 'custom', CLAUDE_MEM_OPENAI_COMPAT_BASE_URL: 'http://127.0.0.1:1/v1',
     CLAUDE_MEM_OPENAI_COMPAT_API_KEY: '', CLAUDE_MEM_TIER_ROUTING_ENABLED: 'false',
     CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED: 'false',
+    // FORK: this mock bypasses the env overrides tests/preload.ts sets.
+    CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED: 'false',
   };
   SettingsDefaultsManager.loadFromFile = (() => settings) as typeof originalLoad;
   const store = new SessionStore(':memory:');
