@@ -518,7 +518,7 @@ const tools = [
       type: 'object',
       properties: {
         mode: { type: 'string', enum: ['guided', 'auto'], description: 'Guided by default; auto completes index, context and filtered details in one call.' },
-        query: { type: 'string', description: 'Search query; required for a new search, up to 500 characters.' },
+        query: { type: 'string', description: 'Search query; required for a new search, up to 500 characters. MUST be in English — non-English queries return unrelated results. Keep identifiers (paths, ticket ids, error strings) verbatim.' },
         project: { type: 'string', description: 'Optional project filter.' },
         limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Index result count, default 20.' },
         maxDetails: { type: 'integer', minimum: 1, maximum: 5, description: 'Maximum full details, default 3.' },
