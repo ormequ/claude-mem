@@ -12,6 +12,11 @@ import { scopedProjects } from '../../../sqlite/project-read-keys.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { logger } from '../../../../utils/logger.js';
 import { groupByDate } from '../../../../shared/timeline-formatting.js';
+import {
+  SEMANTIC_CONTEXT_MAX_LIMIT,
+  SEMANTIC_CONTEXT_MIN_QUERY_CHARS,
+  renderSemanticContext,
+} from '../../../../shared/semantic-context.js';
 import { countObservationsByProjects } from '../../../context/ObservationCompiler.js';
 import { bumpRelevanceCount } from '../../../sqlite/observations/relevance.js';
 import { observerHealthWarning, withObserverHealthWarning } from '../../../context/ContextBuilder.js';
@@ -23,6 +28,8 @@ import {
   type ContextCacheKeys,
 } from '../../../../shared/context-cache.js';
 import type { ContextCacheService, ContextVariantRender } from '../../ContextCacheService.js';
+import type { ContextReadWorkerClient } from '../../../context/ContextReadWorkerClient.js';
+import type { WorkStateEntry } from '../../../sqlite/work-state.js';
 
 interface ContextInjectRender {
   /** The block with its time placeholders. */
@@ -31,6 +38,7 @@ interface ContextInjectRender {
   cacheable: boolean;
   /** Observations the block delivered, counted as retrievals once it is sent. */
   injectedObservationIds?: number[];
+  readKeys?: string[];
 }
 import { buildWorkStateContextSection } from '../../../context/sections/WorkStateRenderer.js';
 import { isWorkStateEnabled } from '../../../../shared/work-state-setting.js';
@@ -109,6 +117,7 @@ const semanticContextSchema = z.object({
   format: z.string().optional(),
   platformSource: z.string().optional(),
   platform_source: z.string().optional(),
+  cwd: z.string().optional(),
 }).passthrough();
 
 export class SearchRoutes extends BaseRouteHandler {
@@ -126,9 +135,10 @@ export class SearchRoutes extends BaseRouteHandler {
     // Records each live SessionStart render so the hook can read it from disk
     // next time (liveness plan, Phase 6). Null in tests and tools that only
     // need the route.
-    private contextCache: Pick<ContextCacheService, 'recordLiveRender' | 'removalGenerationNow' | 'warmVariant'> | null = null,
+    private contextCache: (Pick<ContextCacheService, 'recordLiveRender' | 'removalGenerationNow' | 'warmVariant'> & Partial<Pick<ContextCacheService, 'invalidationGenerationNow' | 'beginRenderSequence'>>) | null = null,
     // Cloud sync's pull loop (null when sync is off). Structural so tests can stub it.
     private syncClient: { pullOnce(options?: { timeoutMs?: number }): Promise<void>; isSocketLive(): boolean } | null = null,
+    private contextReader: ContextReadWorkerClient | null = null,
   ) {
     super();
   }
@@ -158,10 +168,10 @@ export class SearchRoutes extends BaseRouteHandler {
       ?? this.getCachedSettings().CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE) === 'true';
   }
 
-  private projectsHaveObservations(
+  private async projectsHaveObservations(
     sessionStore: ReturnType<SearchManager['getSessionStore']>,
     projects: string[],
-  ): boolean {
+  ): Promise<boolean> {
     // Cross-harness: the welcome hint reflects whether the project has ANY
     // memory, regardless of which harness produced it — mirrors the
     // platform-agnostic session-start injection (see ObservationCompiler).
@@ -174,12 +184,24 @@ export class SearchRoutes extends BaseRouteHandler {
     if (removalGeneration !== undefined && this.projectsKnownNonEmpty.has(cacheKey)) {
       return true;
     }
-    const observationCount = countObservationsByProjects(sessionStore, projects);
-    if (observationCount > 0) {
-      if (removalGeneration !== undefined) this.projectsKnownNonEmpty.add(cacheKey);
+    const hasObservations = this.contextReader
+      ? await this.contextReader.hasObservations(projects)
+      : countObservationsByProjects(sessionStore, projects) > 0;
+    if (hasObservations) {
+      // The read awaited the context reader: a delete that landed meanwhile
+      // makes this positive stale, so only remember it for the same generation.
+      if (removalGeneration !== undefined && removalGeneration === this.contextCache?.removalGenerationNow()) {
+        this.projectsKnownNonEmpty.add(cacheKey);
+      }
       return true;
     }
     return false;
+  }
+
+  private async readWorkStateEntries(projects: string[]): Promise<WorkStateEntry[]> {
+    const store = this.searchManager.getSessionStore();
+    if (this.contextReader) return this.contextReader.workState(projects, store.getLocalSyncDeviceId());
+    return store.getWorkStateEntries(projects);
   }
 
   setupRoutes(app: express.Application): void {
@@ -213,7 +235,7 @@ export class SearchRoutes extends BaseRouteHandler {
     // carry the depth/economics stats computed during generation.
 
     app.get('/api/search', this.handleUnifiedSearch.bind(this));
-    app.post('/api/mem-search', this.handleProgressiveSearch.bind(this));
+    app.post('/api/dumb-search', this.handleDumbSearch.bind(this));
     app.get('/api/timeline', this.handleUnifiedTimeline.bind(this));
 
     app.get('/api/search/observations', this.handleSearchObservations.bind(this));
@@ -239,13 +261,13 @@ export class SearchRoutes extends BaseRouteHandler {
     res.json(result);
   });
 
-  private handleProgressiveSearch = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+  private handleDumbSearch = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     this.progressiveSearch ??= new ProgressiveMemorySearch(this.searchManager, this.searchManager.getSessionStore());
-    const { searchScope, projects, ...input } = req.body ?? {};
-    const scope = typeof searchScope === 'string' ? `worker/${searchScope}` : 'worker/global';
+    const { projects, ...input } = req.body ?? {};
     try {
-      res.json(progressiveSearchToolResult(await this.progressiveSearch.run(input as ProgressiveSearchInput, scope, projects)));
+      res.json(progressiveSearchToolResult(await this.progressiveSearch.run(input as ProgressiveSearchInput, projects)));
     } catch (error) {
+      logger.warn('HTTP', 'Progressive memory search failed', { projectCount: Array.isArray(projects) ? projects.length : projects ? 1 : 0 }, error instanceof Error ? error : new Error(String(error)));
       res.json(progressiveSearchToolError(error));
     }
   });
@@ -358,7 +380,8 @@ export class SearchRoutes extends BaseRouteHandler {
         projects: [projectName],
         ...(platformSource ? { platformSource } : {})
       },
-      true  
+      true,
+      { execution: this.contextReader ? 'worker' : 'inline', reader: this.contextReader ?? undefined }
     );
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -386,7 +409,10 @@ export class SearchRoutes extends BaseRouteHandler {
     // A host that cannot run the project resolver itself (the OMP hook) sends
     // its cwd instead: read the keys the CLI context hook sends for that checkout.
     if (!projectsParam && hostCwd.trim()) {
-      projectsParam = getProjectContext(hostCwd).allProjects.join(',');
+      const resolvedProjects = this.contextReader
+        ? await this.contextReader.projectsForCwd(hostCwd)
+        : getProjectContext(hostCwd).allProjects;
+      projectsParam = resolvedProjects.join(',');
     }
     const forHuman = req.query.colors === 'true';
     const full = req.query.full === 'true';
@@ -413,6 +439,9 @@ export class SearchRoutes extends BaseRouteHandler {
     }
     // A delete that lands while this renders must not see its row written back to the cache.
     const removalGenerationAtRenderStart = this.contextCache?.removalGenerationNow();
+    const invalidationGenerationAtStart = this.contextCache?.invalidationGenerationNow?.();
+    // A queued re-render that starts after this one must win, even if it finishes first.
+    const renderSequenceAtStart = this.contextCache?.beginRenderSequence?.();
     let rendered: ContextInjectRender;
     try {
       rendered = await this.renderContextInjectBody({ projects, platformSource, forHuman, full, cwd: hostCwd || undefined, sessionId: hostSessionId, includePriorMessage: showLastMessage });
@@ -450,16 +479,27 @@ export class SearchRoutes extends BaseRouteHandler {
     // chosen for this session: its variant is warmed instead, without a reply.
     const respondedAtEpochMs = Date.now();
     if (!full && this.contextCache) {
-      const keys = contextCacheKeys(projects, platformSource, forHuman, hostCwd || undefined);
-      if (showLastMessage) {
-        this.contextCache.warmVariant(keys);
-      } else {
-        this.contextCache.recordLiveRender(
-          keys,
-          { body: rendered.body, cacheable: rendered.cacheable },
-          respondedAtEpochMs,
-          removalGenerationAtRenderStart,
-        );
+      try {
+        const keys = contextCacheKeys(projects, platformSource, forHuman, hostCwd || undefined);
+        if (showLastMessage) {
+          await this.contextCache.warmVariant(keys, rendered.readKeys);
+        } else {
+          await this.contextCache.recordLiveRender(
+            keys,
+            {
+              body: rendered.body, cacheable: rendered.cacheable,
+              ...(rendered.readKeys ? { readKeys: rendered.readKeys } : {}),
+              ...(invalidationGenerationAtStart !== undefined ? { invalidationGenerationAtStart } : {}),
+            },
+            respondedAtEpochMs,
+            removalGenerationAtRenderStart,
+            renderSequenceAtStart,
+          );
+        }
+      } catch (error) {
+        logger.warn('CONTEXT_CACHE', 'Could not cache rendered context; serving the live result', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -489,7 +529,7 @@ export class SearchRoutes extends BaseRouteHandler {
       full: false,
       includePriorMessage: false,
     });
-    return { body: rendered.body, cacheable: rendered.cacheable };
+    return { body: rendered.body, cacheable: rendered.cacheable, ...(rendered.readKeys ? { readKeys: rendered.readKeys } : {}) };
   }
 
   /**
@@ -524,7 +564,7 @@ export class SearchRoutes extends BaseRouteHandler {
     );
     const workStateSection = forHuman || !workStateEnabled
       ? ''
-      : buildWorkStateContextSection(this.searchManager.getSessionStore().getWorkStateEntries(projects), 'placeholders');
+      : buildWorkStateContextSection(await this.readWorkStateEntries(projects), 'placeholders');
     const withWorkState = (text: string): string =>
       workStateSection && text ? `${workStateSection}\n\n${text}` : workStateSection || text;
 
@@ -538,7 +578,7 @@ export class SearchRoutes extends BaseRouteHandler {
       const sessionStore = this.searchManager.getSessionStore();
       // Memoized: skips the COUNT(*) query once any project in the set has
       // observations. Hot-path: PostToolUse fires after every Read/Edit.
-      if (!this.projectsHaveObservations(sessionStore, projects)) {
+      if (!await this.projectsHaveObservations(sessionStore, projects)) {
         const port = process.env.CLAUDE_MEM_WORKER_PORT ?? settings.CLAUDE_MEM_WORKER_PORT;
         const viewerUrl = getViewerBaseUrl(port);
         const hintBody = WELCOME_HINT_TEMPLATE
@@ -575,25 +615,42 @@ export class SearchRoutes extends BaseRouteHandler {
       }),
       timePlaceholders: true,
       includePriorMessage: request.includePriorMessage,
-    }, forHuman);
+    }, forHuman, { execution: this.contextReader ? 'worker' : 'inline', reader: this.contextReader ?? undefined });
     return {
       body: withWorkState(contextResult.text),
       stats: contextResult.stats,
       cacheable,
       injectedObservationIds: contextResult.injectedObservationIds,
+      ...(contextResult.readKeys ? { readKeys: contextResult.readKeys } : {}),
     };
   }
 
   private handleSemanticContext = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const query = SearchRoutes.firstString(req.body?.q) ?? SearchRoutes.firstString(req.query.q) ?? '';
-    const project = SearchRoutes.firstString(req.body?.project) ?? SearchRoutes.firstString(req.query.project);
-    const projects = SearchRoutes.parseProjectsParam(req.body?.projects ?? req.query.projects);
-    const limit = Math.min(Math.max(parseInt(String(req.body?.limit || req.query.limit || '5'), 10) || 5, 1), 20);
+    let project = SearchRoutes.firstString(req.body?.project) ?? SearchRoutes.firstString(req.query.project);
+    let projects = SearchRoutes.parseProjectsParam(req.body?.projects ?? req.query.projects);
+    const limit = Math.min(Math.max(parseInt(String(req.body?.limit || req.query.limit || '5'), 10) || 5, 1), SEMANTIC_CONTEXT_MAX_LIMIT);
     const platformSource = this.getOptionalPlatformSourceFromRequest(req);
 
-    if (!query || query.length < 20) {
+    if (!query || query.length < SEMANTIC_CONTEXT_MIN_QUERY_CHARS) {
       res.json({ context: '', count: 0 });
       return;
+    }
+
+    // Resolve the same checkout keys as /api/context/inject when none were named.
+    const hostCwd = typeof req.body?.cwd === 'string' ? req.body.cwd.trim() : '';
+    if (hostCwd) {
+      const excludedProjects = process.env.CLAUDE_MEM_EXCLUDED_PROJECTS
+        ?? this.getCachedSettings().CLAUDE_MEM_EXCLUDED_PROJECTS;
+      if (isProjectExcluded(hostCwd, excludedProjects)) {
+        res.json({ context: '', count: 0 });
+        return;
+      }
+      if (!project && projects.length === 0) {
+        const checkout = getProjectContext(hostCwd);
+        project = checkout.primary;
+        projects = checkout.allProjects;
+      }
     }
 
     let result: any;
@@ -635,15 +692,13 @@ export class SearchRoutes extends BaseRouteHandler {
       return;
     }
 
-    const lines: string[] = ['## Relevant Past Work (semantic match)\n'];
-    for (const obs of observations.slice(0, limit)) {
-      const date = obs.created_at?.slice(0, 10) || '';
-      lines.push(`### ${obs.title || 'Observation'} (${date})`);
-      if (obs.narrative) lines.push(obs.narrative);
-      lines.push('');
-    }
+    const context = renderSemanticContext(observations.slice(0, limit).map((obs: any) => ({
+      title: obs.title,
+      narrative: obs.narrative,
+      date: obs.created_at?.slice(0, 10) || '',
+    })));
 
-    res.json({ context: lines.join('\n'), count: observations.length });
+    res.json({ context, count: observations.length });
   });
 
   /**

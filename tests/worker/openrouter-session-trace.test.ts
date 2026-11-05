@@ -82,6 +82,7 @@ beforeEach(() => {
       // FORK: this mock bypasses the env overrides tests/preload.ts sets, so
       // turn the fork's real-clock call pacing off here too.
       CLAUDE_MEM_OPENROUTER_RATE_LIMITING_ENABLED: 'false',
+      CLAUDE_MEM_OPENAI_COMPAT_RATE_LIMITING_ENABLED: 'false',
       CLAUDE_MEM_TIER_ROUTING_ENABLED: 'false',
       // A known window: no catalog fetch, and a 400k-char generation budget.
       CLAUDE_MEM_OBSERVER_CONTEXT_WINDOW: '200000',

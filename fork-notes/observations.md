@@ -110,7 +110,7 @@ one fork-owned module. Rationale and measurements live in
   returns confident, unrelated results — an all-English corpus does not fix that, because the
   *query* is what degenerates. Two read-side deltas: `plugin/skills/mem-search/SKILL.md`
   gained a "Query in English, always" section (re-applied onto upstream's v13.35 rewrite
-  of the skill, before the guided flow, with `mem_search(...)` examples), and the `query` param description of the MCP
+  of the skill, re-applied again at v15.9 with `search(...)` examples), and the `query` param description of the MCP
   `search` tool (`src/servers/mcp-server.ts`) says the same. Write side is the LANGUAGE block
   in `code.json`. This is what cancels the expensive DEC-06 remedies (multilingual embedder
   via ollama, re-embedding ~26k rows, a third runtime dependency) — do not re-open them

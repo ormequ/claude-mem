@@ -111,6 +111,24 @@ Small, self-contained changes that do not need a section of their own.
   when cloud sync is not configured) was dropped in v13.35: upstream ships the
   same gate as `syncOpsEnabled`, plus a boot-time purge of undrainable ops.
 
+## Adopted at v15.9
+
+- **`mem_search` is gone.** Upstream restored `search` → `timeline` → `get_observations` as the
+  default recall and renamed the one-call lookup to `dumb_search`; guided mode and continuations
+  were removed. The English-query rule now sits on `search`, `timeline`, `dumb_search` and the skill.
+- **`CLAUDE_MEM_MODEL` defaults to upstream's `haiku` alias**, which tracks the newest Haiku, so
+  the fork's `claude-haiku-5-5` pin was dropped.
+- **`CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH` defaults to `false`** (upstream `true`): a My Work refresh
+  runs the user's logged-in agent CLI on their own subscription, the spend the provider default
+  exists to avoid.
+- **The installer's browser funnel is gated by `CMEM_ACCOUNT_LOGIN_ENABLED`**, because it is the
+  cmem.ai trial and Stripe hand-off. Upstream moved the login into `terminalAccountAndProvider`,
+  which carries the same gate.
+- **`getSelectedProvider` / `selectProviderForGenerator` take `(platformSource, project)`.**
+  `CLAUDE_MEM_PROJECT_PROVIDERS` wins over upstream's `CLAUDE_MEM_PROVIDER_BY_SOURCE`.
+- **`known-marketplace-location.ts` names `ormequ`.** It is the new shared source of marketplace
+  paths; re-check it on every merge alongside the launcher.
+
 ## Project identity
 
 - `CLAUDE_MEM_PROJECT_ROOT` (fork-only env var, top of `getProjectContext` in

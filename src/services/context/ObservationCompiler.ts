@@ -3,7 +3,7 @@ import path from 'path';
 import { existsSync, readFileSync } from 'fs';
 import type { Database } from 'bun:sqlite';
 import { logger } from '../../utils/logger.js';
-import { SYSTEM_REMINDER_REGEX } from '../../utils/tag-stripping.js';
+import { stripSystemReminderBlocks } from '../../utils/tag-stripping.js';
 import { CLAUDE_CONFIG_DIR } from '../../shared/paths.js';
 import { mainAgentRowSql } from '../../shared/subagent-predicate.js';
 import { poolSize, rankByStrength } from '../reinforcement/rank.js';
@@ -161,6 +161,8 @@ export function queryObservationsNewest(
 
   const reinforcementColumn = options.withReinforcementDates ? ',\n      o.reinforcement_dates' : '';
 
+  // json_each throws on a non-JSON concepts value, which would fail the whole
+  // query and drop all context. Such a row cannot match a concept, so skip it.
   const filterSql = `(? IS NULL OR s.platform_source = ?)
       ${agentFilter}
       AND (${manualClause} (
@@ -168,7 +170,7 @@ export function queryObservationsNewest(
         AND (
           ${emptyConceptsClause}
           EXISTS (
-            SELECT 1 FROM json_each(o.concepts)
+            SELECT 1 FROM json_each(CASE WHEN json_valid(o.concepts) THEN o.concepts ELSE '[]' END)
             WHERE value IN (${conceptPlaceholders})
           )
         )
@@ -225,13 +227,18 @@ export function queryObservationsNewest(
 export function countObservationsByProjects(db: DatabaseOwner, projects: string[]): number {
   if (projects.length === 0) return 0;
   const projectPlaceholders = projects.map(() => '?').join(',');
-  const row = db.db.prepare(`
+  const statement = db.db.prepare(`
     SELECT COUNT(*) as count
     FROM observations o
     WHERE (o.project COLLATE NOCASE IN (${projectPlaceholders})
        OR o.merged_into_project COLLATE NOCASE IN (${projectPlaceholders}))
-  `).get(...projects, ...projects) as { count: number } | undefined;
-  return row?.count ?? 0;
+  `);
+  try {
+    const row = statement.get(...projects, ...projects) as { count: number } | undefined;
+    return row?.count ?? 0;
+  } finally {
+    statement.finalize();
+  }
 }
 
 /** A summary row that carries something to show (an empty compaction row does not). */
@@ -345,7 +352,7 @@ function parseAssistantTextFromLine(line: string): string | null {
     for (const block of entry.message.content) {
       if (block.type === 'text') text += block.text;
     }
-    text = text.replace(SYSTEM_REMINDER_REGEX, '').trim();
+    text = stripSystemReminderBlocks(text).trim();
     if (text) return text;
   }
   return null;
@@ -403,10 +410,24 @@ export function getPriorSessionMessages(
     return { assistantMessage: '' };
   }
 
+  // The session id arrives from host payloads and synced rows and becomes a
+  // path segment below, so refuse anything that can leave its directory.
   const priorSessionId = priorSessionObs.content_session_id ?? priorSessionObs.memory_session_id;
+  if (typeof priorSessionId !== 'string' || !isSafeTranscriptSessionId(priorSessionId)) {
+    return { assistantMessage: '' };
+  }
   const dashedCwd = cwdToDashed(cwd);
   const transcriptPath = path.join(CLAUDE_CONFIG_DIR, 'projects', dashedCwd, `${priorSessionId}.jsonl`);
   return extractPriorMessages(transcriptPath);
+}
+
+function isSafeTranscriptSessionId(value: string): boolean {
+  return value.length > 0
+    && value !== '.'
+    && value !== '..'
+    && !value.includes('/')
+    && !value.includes('\\')
+    && !value.includes('\0');
 }
 
 export function prepareSummariesForTimeline(

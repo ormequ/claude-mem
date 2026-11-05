@@ -86,6 +86,8 @@ describe('SearchOrchestrator cross-harness search (platform_source ignored on re
       'legacy docs',
       100,
       { $and: [{ doc_type: 'observation' }, { $or: [{ project: 'orchestrator-project' }, { merged_into_project: 'orchestrator-project' }] }] },
+      expect.any(Object),
+      expect.any(Function),
     );
     const ftsOptions = (searchObservations.mock.calls[0] as any[] | undefined)?.[1] ?? {};
     expect(ftsOptions.platformSource).toBeUndefined();
@@ -181,7 +183,7 @@ describe('SearchOrchestrator chromaSync=null fallback (#4284)', () => {
         searchSessions,
         searchUserPrompts,
       } as any,
-      {} as any,
+      { getProjectReadKeys: (projects: string[]) => projects } as any,
       null,
     );
 
@@ -211,7 +213,7 @@ describe('SearchOrchestrator chromaSync=null fallback (#4284)', () => {
         searchSessions: mock(() => []),
         searchUserPrompts: mock(() => []),
       } as any,
-      {} as any,
+      { getProjectReadKeys: (projects: string[]) => projects } as any,
       null,
     );
 
@@ -240,7 +242,7 @@ describe('SearchOrchestrator chromaSync=null fallback (#4284)', () => {
         searchSessions,
         searchUserPrompts,
       } as any,
-      {} as any,
+      { getProjectReadKeys: (projects: string[]) => projects } as any,
       null,
     );
 

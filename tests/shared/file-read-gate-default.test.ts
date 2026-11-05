@@ -4,6 +4,14 @@ import { join } from 'path';
 import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManager.js';
 import { paths } from '../../src/shared/paths.js';
 
+// Fork: a My Work refresh runs the user's logged-in agent on their subscription, so it is opt-in.
+// An upstream merge that restores 'true' fails here.
+describe('CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH default', () => {
+  it('is off', () => {
+    expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH).toBe('false');
+  });
+});
+
 // Fork: the gate defaults OFF (never deny a Read; the timeline is still
 // injected as context). An upstream merge that restores 'true' fails here.
 describe('CLAUDE_MEM_FILE_READ_GATE_ENABLED default', () => {

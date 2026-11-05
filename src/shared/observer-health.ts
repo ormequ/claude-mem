@@ -21,6 +21,7 @@ import { viewerBaseUrl } from './viewer-url.js';
 import { relayedLine, relayedLink } from './relayed-text.js';
 import { logger } from '../utils/logger.js';
 import { emitContextInvalidation } from './context-invalidation.js';
+import { sleepSync } from './atomic-json.js';
 
 export interface ObserverHealthState {
   /** Failures since the last successful store. */
@@ -93,6 +94,8 @@ export interface ObserverQuotaCooldown {
    * else can serve; the notice then says capture is paused.
    */
   servingProvider?: string;
+  /** 'claude' only: the credential that is held ('api-key' | 'subscription'), when one is. */
+  auth?: string;
 }
 
 /**
@@ -203,10 +206,6 @@ const LEDGER_LOCK_STALE_MS = 5_000;
 /** Give up waiting and update unlocked rather than lose the failure entirely. */
 const LEDGER_LOCK_MAX_WAIT_MS = 2_000;
 const LEDGER_LOCK_RETRY_MS = 10;
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
 
 /**
  * Serialize the ledger's read-modify-write across processes. Every worker and
@@ -332,6 +331,7 @@ export function recordObserverQuotaCooldown(
         ...(cooldown.window ? { window: cooldown.window } : {}),
         ...(cooldown.message ? { message: scrubErrorMessage(cooldown.message) } : {}),
         ...(cooldown.servingProvider ? { servingProvider: cooldown.servingProvider } : {}),
+        ...(cooldown.auth ? { auth: cooldown.auth } : {}),
       },
     }, filePath, prior);
   });
@@ -545,6 +545,12 @@ export function renderObserverQuotaCooldownNotice(
   // below applies — least of all "do not restart", advice about a problem
   // that is not happening. No primary/fallback wording: the held provider can
   // be either one.
+  if (cooldown?.servingProvider === 'claude' && provider === 'claude') {
+    // CLAUDE_MEM_QUOTA_FALLBACK_AUTH_METHOD: same provider, the other credential.
+    return cooldown.auth === 'subscription'
+      ? `ℹ️ claude-mem's Claude Code subscription login is paused for quota${windowText}; memory is running on your fallback API key (ANTHROPIC_FALLBACK_API_KEY) meanwhile, and switches back to the login after ${untilText}.`
+      : `ℹ️ claude-mem's Claude API key is in a quota cooldown${windowText}; memory is running on your Claude Code subscription login meanwhile, and switches back to the key after ${untilText}.`;
+  }
   if (cooldown?.servingProvider === 'claude') {
     // The default fallback: say plainly that memory is on the Anthropic plan.
     const why = cooldown.window === 'unavailable' ? 'is unavailable'
@@ -762,17 +768,27 @@ export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: n
   // rejected the key (or the account), and nothing is wedged. Relay the
   // provider's remedy instead of offering a restart that changes nothing.
   if (isAuthFailure(state)) {
+    // provider-errors' CODEX_AUTH_FROM_EXIT_TEXT_CODE: our reading of an exited
+    // process's stderr, which can be wrong, not a refusal the provider sent.
+    const readFromExitText = state.lastErrorCode === 'codex_auth_from_exit_text';
     return [
       "⚠️ Heads up: claude-mem can't save memories right now.",
       '',
-      `The memory observer's credentials have been refused by ${provider} ${sinceText}.`,
+      readFromExitText
+        ? `The memory observer has been paused ${sinceText}: the ${provider} process exited with output that looks like a refused login.`
+        : `The memory observer's credentials have been refused by ${provider} ${sinceText}.`,
       '',
       ...renderFailureDetailLines(state, action),
       '',
       "Until that's fixed, nothing from this session — or any other — will be remembered.",
       '',
-      'Restarting will NOT help here: the provider refused the credentials, so nothing is broken to restart.',
-      ...(action ? [] : [
+      ...(readFromExitText ? [
+        'This comes from the exited process\'s output, not a reply from the provider, so it may be wrong.',
+        'Run `codex login status` to check. If the login is fine, the next captured event or an operator retry can trigger another attempt after the cooldown ends.',
+      ] : [
+        'Restarting will NOT help here: the provider refused the credentials, so nothing is broken to restart.',
+      ]),
+      ...(action || readFromExitText ? [] : [
         "Check the observer provider's API key in ~/.claude-mem/settings.json, or switch the",
         'observer to another provider there.',
       ]),

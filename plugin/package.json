@@ -1,12 +1,20 @@
 {
   "name": "claude-mem-plugin",
-  "version": "13.41.0+fork.worker.20261017.1",
+  "version": "15.9.0+fork.worker.20261105.1",
   "private": true,
   "description": "Runtime dependencies for claude-mem bundled hooks",
   "type": "module",
   "dependencies": {
+    "sharp": "0.35.5",
     "zod": "^4.4.3",
     "shell-quote": "1.9.0"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.23.2",
+    "onnxruntime-web": "npm:onnxruntime-common@1.23.2"
   },
   "allowScripts": {
     "tree-sitter-cli": true,
