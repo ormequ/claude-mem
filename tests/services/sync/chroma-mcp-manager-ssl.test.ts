@@ -126,6 +126,7 @@ function expectLauncherPrefixBeforeMode(args: string[], mode: 'http' | 'persiste
   expect(args.filter(arg => arg === 'chromadb==1.5.9')).toHaveLength(1);
   expect(args.slice(0, fromIdx)).toEqual([
     '--python', '3.13',
+    '--exclude-newer', '2026-11-05T00:00:00Z',
     '--with', 'onnxruntime>=1.20',
     '--with', 'protobuf<7',
     '--with', 'chromadb==1.5.9',

@@ -135,6 +135,12 @@ const CHROMA_MCP_DEP_OVERRIDES: ReadonlyArray<string> = [
   'pydantic<2.14',
 ];
 
+// Freezes the rest of the dependency tree. Only the packages above are bounded,
+// so every upstream release of a transitive dep changed the resolution and uvx
+// built a whole new ~400MB environment that nothing ever evicts from uv's cache.
+// Raise this date together with the pins above.
+const CHROMA_MCP_EXCLUDE_NEWER = '2026-11-05T00:00:00Z';
+
 // The chromadb version the launcher pins, read from the override list itself
 // so the store record can never disagree with what uvx actually runs.
 const CHROMADB_PINNED_VERSION: string | null =
@@ -1020,6 +1026,7 @@ export class ChromaMcpManager {
     const depOverrideFlags = CHROMA_MCP_DEP_OVERRIDES.flatMap(spec => ['--with', spec]);
     return [
       '--python', pythonVersion,
+      '--exclude-newer', CHROMA_MCP_EXCLUDE_NEWER,
       ...depOverrideFlags,
       '--from', `chroma-mcp==${CHROMA_MCP_PINNED_VERSION}`,
       'chroma-mcp',
