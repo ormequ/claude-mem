@@ -272,6 +272,13 @@ false positives to be subtracted later. They are **not prompts at all**, and the
 window before anything is labelled, or every rate in this lane is computed over a denominator
 that is partly machine.
 
+**The store already drops the marked ones.** `search(type="prompts")` leaves out every row that
+matches the store's machine-relay markers, and direct SQL gets the same filter by reading the
+`human_user_prompts` view instead of `user_prompts`. Count what the markers removed as
+`user_prompts` minus `human_user_prompts` over the window. What still needs subtracting by hand is
+only what slipped past the markers — and each such shape is a missing marker to report, not a
+row to quietly drop.
+
 **The class is wider than the envelope, though: it is every prompt authored by an agent rather
 than by the user, and it comes in two shapes.** The inbound relay arrives wrapped, so sight
 catches it. The outbound brief — what one session types into another agent's session — is stored

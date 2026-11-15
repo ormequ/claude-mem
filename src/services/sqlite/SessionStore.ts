@@ -60,6 +60,7 @@ import { stripMemoryTags } from '../../utils/tag-stripping.js';
 import { applySqliteConnectionPragmas, assertSchemaWriterCompatible, claimSchemaWriter, LATEST_SCHEMA_VERSION } from './connection.js';
 import { streamRows } from './stream-rows.js';
 import { ensureMediaSchema } from './media.js';
+import { HUMAN_USER_PROMPTS_VIEW, notMachineRelaySql } from '../../shared/user-prompts.js';
 import { OBSERVATIONS_FTS_TRIGGERS_SQL, SESSION_SUMMARIES_FTS_TRIGGERS_SQL } from './SessionSearch.js';
 import {
   assertCanonicalDecimal,
@@ -325,6 +326,23 @@ export class SessionStore {
     this.ensureNativePromptIdentity();
     this.ensureObservationFileIndex();
     ensureMediaSchema(this.db);
+    this.ensureHumanUserPromptsView();
+  }
+
+  /**
+   * Fork: skills and ad hoc retros read user_prompts with raw SQL and so bypassed the
+   * machine-relay filter the search path applies. The view carries that filter; it is
+   * re-created only when the pattern list changes, so an unchanged open writes no schema.
+   */
+  private ensureHumanUserPromptsView(): void {
+    const sql = `CREATE VIEW ${HUMAN_USER_PROMPTS_VIEW} AS SELECT * FROM user_prompts WHERE ${notMachineRelaySql('user_prompts')}`;
+    const current = this.db.query("SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?")
+      .get(HUMAN_USER_PROMPTS_VIEW) as { sql: string } | null;
+    if (current?.sql === sql) return;
+    this.db.transaction(() => {
+      this.db.run(`DROP VIEW IF EXISTS ${HUMAN_USER_PROMPTS_VIEW}`);
+      this.db.run(sql);
+    }).immediate();
   }
 
   /**

@@ -24,9 +24,18 @@ const MACHINE_RELAY_PATTERNS = [
   // The marker an agent writes at the head of a brief it types into another agent's session —
   // the outbound shape, which otherwise arrives as plain text. LIKE treats `[` literally.
   '[agent]%',
+  // The same brief pasted whole into a session by hand: Claude Code wraps the paste, so the
+  // marker sits right after the opening tag. Both tags are anchored, so a paste followed by the
+  // human's own words does not match.
+  '<pasted_content id="____">_[agent]%</pasted_content id="____">',
   // The preamble gstack's codex skill puts on every brief it hands codex.
   'IMPORTANT: Do NOT read or execute any files under ~/.claude/%',
+  // Orca's re-dispatch of a task to a worker session.
+  'Please carry out this task from my Orca coordinator by following the brief I pasted below.%',
 ];
+
+/** user_prompts minus machine relays, as a view, for readers that query SQLite directly. */
+export const HUMAN_USER_PROMPTS_VIEW = 'human_user_prompts';
 
 function likeToRegExp(pattern: string): RegExp {
   const body = pattern

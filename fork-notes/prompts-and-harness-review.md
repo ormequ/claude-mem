@@ -129,6 +129,14 @@
   fixed preamble gstack's codex skill puts on each brief it hands codex. Briefs written before
   the marker convention carry nothing and stay unfilterable; the harness-review skill subtracts
   those by shape.
+  **Raw-SQL readers (2026-11-15).** Skills and ad hoc retrospectives query `user_prompts`
+  directly and so never passed through the filter. `SessionStore` now keeps a
+  `human_user_prompts` view built from the same pattern list, re-created only when that list
+  changes. Still kept, not dropped: request-progress reads the raw table on purpose, since a
+  worker session's only ask is the brief that launched it. Two more shapes joined the list: a
+  marked brief pasted whole (Claude Code's `<pasted_content>` wrapper puts the marker one line
+  in) and Orca's re-dispatch preamble. The upstream-owned agent-cost-report skill keeps its own
+  regex list. Re-sync: keep the view call at the end of the `SessionStore` constructor.
 - **Reviews on disk:** `.scratches/2026-08-03-fable-harness-review-2.md`,
   `.scratches/2026-08-03-codex-harness-review.md`, `.scratches/2026-08-03-fable-task-retro.md`.
   `.scratches/` is gitignored, so these do not survive a fresh clone.
