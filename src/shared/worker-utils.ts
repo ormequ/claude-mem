@@ -133,7 +133,23 @@ function logVerboseFetchFailure(url: string, init: RequestInit, err: unknown): v
   emitDiagnostic(`[claude-mem] fetch verbose: ${method} ${url} ${serialized}\n`);
 }
 
+const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1'];
+
+// Bun's fetch honours HTTP(S)_PROXY/ALL_PROXY from the environment and rejects
+// socks5:// with UnsupportedProxyProtocol, even for 127.0.0.1. A host that
+// launches the MCP server with a socks proxy and no NO_PROXY (agy does) broke
+// every worker call. Bun reads NO_PROXY at fetch time, so adding the loopback
+// hosts here is enough; a non-loopback worker host still goes through the proxy.
+export function ensureLoopbackBypassesProxy(env: NodeJS.ProcessEnv = process.env): void {
+  for (const key of ['NO_PROXY', 'no_proxy']) {
+    const entries = (env[key] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const missing = LOOPBACK_HOSTS.filter((host) => !entries.includes(host));
+    if (missing.length > 0) env[key] = [...entries, ...missing].join(',');
+  }
+}
+
 async function workerFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  ensureLoopbackBypassesProxy();
   const requestInit = withFetchDiagnostics(init);
   try {
     return await fetch(url, requestInit);
